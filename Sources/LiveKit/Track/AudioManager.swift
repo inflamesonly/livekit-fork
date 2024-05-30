@@ -233,8 +233,9 @@ public class AudioManager: Loggable {
             self.log("\(oldState) -> \(newState)")
 
             #if os(iOS)
-            let configureFunc = newState.customConfigureFunc ?? self.defaultConfigureAudioSessionFunc
-            configureFunc(newState, oldState)
+            if let configureFunc = newState.customConfigureFunc {
+                configureFunc(newState, oldState)
+            }
             #endif
         }
     }
