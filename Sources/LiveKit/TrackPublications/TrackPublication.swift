@@ -90,6 +90,8 @@ public class TrackPublication: NSObject, ObservableObject, Loggable {
         var encryptionType: EncryptionType = .none
 
         var latestInfo: Livekit_TrackInfo?
+
+        var audioTrackFeatures: Set<Livekit_AudioTrackFeature>?
     }
 
     let _state: StateSync<State>
@@ -205,7 +207,7 @@ extension TrackPublication: TrackDelegateInternal {
             let room = try participant.requireRoom()
 
             if shouldSendSignal {
-                try await room.engine.signalClient.sendMuteTrack(trackSid: self.sid, muted: isMuted)
+                try await room.signalClient.sendMuteTrack(trackSid: self.sid, muted: isMuted)
             }
 
             participant.delegates.notify {

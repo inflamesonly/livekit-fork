@@ -20,7 +20,11 @@ import Foundation
 import ReplayKit
 #endif
 
+#if swift(>=5.9)
+internal import LiveKitWebRTC
+#else
 @_implementationOnly import LiveKitWebRTC
+#endif
 
 public class CameraCapturer: VideoCapturer {
     /// Current device used for capturing
@@ -85,8 +89,12 @@ public class CameraCapturer: VideoCapturer {
     // Used to hide LKRTCVideoCapturerDelegate symbol
     private lazy var adapter: VideoCapturerDelegateAdapter = .init(cameraCapturer: self)
 
+    public var captureSession: AVCaptureSession {
+        capturer.captureSession
+    }
+
     // RTCCameraVideoCapturer used internally for now
-    private lazy var capturer: LKRTCCameraVideoCapturer = DispatchQueue.liveKitWebRTC.sync { LKRTCCameraVideoCapturer(delegate: adapter) }
+    private lazy var capturer: LKRTCCameraVideoCapturer = .init(delegate: adapter)
 
     init(delegate: LKRTCVideoCapturerDelegate, options: CameraCaptureOptions) {
         _cameraCapturerState = StateSync(State(options: options))
@@ -146,8 +154,22 @@ public class CameraCapturer: VideoCapturer {
         var device: AVCaptureDevice? = options.device
 
         if device == nil {
+            #if os(iOS)
+            let devices: [AVCaptureDevice]
+            if AVCaptureMultiCamSession.isMultiCamSupported {
+                // Get the list of devices already on the shared multi-cam session.
+                let existingDevices = captureSession.inputs.compactMap { $0 as? AVCaptureDeviceInput }.map(\.device)
+                log("Existing devices: \(existingDevices)")
+                // Compute other multi-cam compatible devices.
+                devices = try await DeviceManager.shared.multiCamCompatibleDevices(for: Set(existingDevices))
+            } else {
+                devices = try await CameraCapturer.captureDevices()
+            }
+            #else
             let devices = try await CameraCapturer.captureDevices()
-            device = devices.first(where: { $0.position == self.options.position }) ?? devices.first
+            #endif
+
+            device = devices.first { $0.position == self.options.position } ?? devices.first
         }
 
         guard let device else {
@@ -172,7 +194,7 @@ public class CameraCapturer: VideoCapturer {
             // Use the preferred capture format if specified in options
             selectedFormat = foundFormat
         } else {
-            if let foundFormat = sortedFormats.first(where: { $0.dimensions.area >= self.options.dimensions.area && $0.format.fpsRange().contains(self.options.fps) }) {
+            if let foundFormat = sortedFormats.first(where: { $0.dimensions.area >= self.options.dimensions.area && $0.format.fpsRange().contains(self.options.fps) && $0.format.isMultiCamSupportediOS }) {
                 // Use the first format that satisfies preferred dimensions & fps
                 selectedFormat = foundFormat
             } else if let foundFormat = sortedFormats.first(where: { $0.dimensions.area >= self.options.dimensions.area }) {
@@ -257,7 +279,7 @@ public extension LocalVideoTrack {
                                   options: CameraCaptureOptions? = nil,
                                   reportStatistics: Bool = false) -> LocalVideoTrack
     {
-        let videoSource = Engine.createVideoSource(forScreenShare: false)
+        let videoSource = RTC.createVideoSource(forScreenShare: false)
         let capturer = CameraCapturer(delegate: videoSource, options: options ?? CameraCaptureOptions())
         return LocalVideoTrack(name: name ?? Track.cameraName,
                                source: .camera,
@@ -298,5 +320,13 @@ extension AVCaptureDevice.Format {
         videoSupportedFrameRateRanges.map { $0.toRange() }.reduce(into: 0 ... 0) { result, current in
             result = merge(range: result, with: current)
         }
+    }
+
+    var isMultiCamSupportediOS: Bool {
+        #if os(iOS)
+        return AVCaptureMultiCamSession.isMultiCamSupported ? isMultiCamSupported : true
+        #else
+        return true
+        #endif
     }
 }

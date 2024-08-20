@@ -11,20 +11,50 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  TESTS: "FunctionTests SDKTests RoomTests PublishDataTests PublishBufferCapturerTests VideoViewTests"
+
 jobs:
-  run_all_tests:
+  run:
     strategy:
       fail-fast: false
       matrix:
-        xcode-version: [14.2, 15.2]
-        destination:
-          [
-            "platform=iOS Simulator,OS=17.2,name=iPhone 14 Pro",
-            "platform=macOS",
-            "platform=macOS,variant=Mac Catalyst",
-          ]
+        include:
+          # https://github.com/actions/runner-images/blob/main/images/macos/macos-13-Readme.md
+          - os: macos-13
+            xcode: 14.2
+            platform: "iOS Simulator,OS=17.2,name=iPhone 14 Pro"
+          - os: macos-13
+            xcode: 14.2
+            platform: "macOS"
+          - os: macos-13
+            xcode: 14.2
+            platform: "macOS,variant=Mac Catalyst"
+          # https://github.com/actions/runner-images/blob/main/images/macos/macos-14-Readme.md
+          - os: macos-14
+            xcode: 15.4
+            platform: "iOS Simulator,OS=17.5,name=iPhone 15 Pro"
+          - os: macos-14
+            xcode: 15.4
+            platform: "macOS"
+          - os: macos-14
+            xcode: 15.4
+            platform: "macOS,variant=Mac Catalyst"
+          - os: macos-14
+            xcode: 15.4
+            platform: "visionOS Simulator" # visionOS 1.2
+          # https://github.com/actions/runner-images/blob/main/images/macos/macos-14-Readme.md
+          - os: macos-14
+            xcode: 16.0-beta
+            platform: "iOS Simulator,OS=18.0,name=iPhone 15 Pro"
+          - os: macos-14
+            xcode: 16.0-beta
+            platform: "macOS"
+          - os: macos-14
+            xcode: 16.0-beta
+            platform: "macOS,variant=Mac Catalyst"
 
-    runs-on: macos-13
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
 
     steps:
@@ -38,26 +68,23 @@ jobs:
 
       - uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: ${{ matrix.xcode-version }}
+          xcode-version: ${{ matrix.xcode }}
 
       - name: Xcode Version
         run: xcodebuild -version
 
-      - name: Show SDKs
-        run: xcodebuild -showsdks
+      - name: Swift Version
+        run: xcrun swift --version
 
-      - name: Download iOS platforms
-        run: xcodebuild -downloadPlatform iOS
+      - name: Build
+        run: xcodebuild build-for-testing -scheme LiveKit -destination 'platform=${{ matrix.platform }}' -parallel-testing-enabled YES
 
-      # TODO: Add step to install iOS 13
-      # - name: Install iOS 13
-      #   run: xcversion simulators --install='iOS 13.0'
-
-      # - name: Download iOS platforms
-      #   run: xcodebuild -downloadPlatform iOS
-
-      - name: Show Destinations
-        run: xcodebuild -scheme LiveKit -showdestinations
-
-      - name: Run All Tests
-        run: xcodebuild test -scheme LiveKit -destination '${{ matrix.destination }}'
+      - name: Run
+        run: |
+          IFS=' ' read -r -a tests <<< "${{ env.TESTS }}"
+          for test in "${tests[@]}"; do
+            echo "::group::Running test $test"
+            xcodebuild test-without-building -scheme LiveKit -destination 'platform=${{ matrix.platform }}' -only-testing:LiveKitTests/$test
+            echo "::endgroup::"
+          done
+        shell: bash

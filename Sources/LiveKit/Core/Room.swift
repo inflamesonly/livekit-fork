@@ -77,32 +77,46 @@ public class Room: NSObject, ObservableObject, Loggable {
 
     // expose engine's vars
     @objc
-    public var url: String? { engine._state.url }
+    public var url: String? { _state.url?.absoluteString }
 
     @objc
-    public var token: String? { engine._state.token }
+    public var token: String? { _state.token }
 
     /// Current ``ConnectionState`` of the ``Room``.
     @objc
-    public var connectionState: ConnectionState { engine._state.connectionState }
+    public var connectionState: ConnectionState { _state.connectionState }
 
     @objc
-    public var disconnectError: LiveKitError? { engine._state.disconnectError }
+    public var disconnectError: LiveKitError? { _state.disconnectError }
 
-    public var connectStopwatch: Stopwatch { engine._state.connectStopwatch }
+    public var connectStopwatch: Stopwatch { _state.connectStopwatch }
 
     // MARK: - Internal
-
-    // Reference to Engine
-    let engine: Engine
 
     public var e2eeManager: E2EEManager?
 
     @objc
     public lazy var localParticipant: LocalParticipant = .init(room: self)
 
+    let primaryTransportConnectedCompleter = AsyncCompleter<Void>(label: "Primary transport connect", defaultTimeout: .defaultTransportState)
+    let publisherTransportConnectedCompleter = AsyncCompleter<Void>(label: "Publisher transport connect", defaultTimeout: .defaultTransportState)
+
+    let signalClient = SignalClient()
+
+    // MARK: - DataChannels
+
+    lazy var subscriberDataChannel = DataChannelPair(delegate: self)
+    lazy var publisherDataChannel = DataChannelPair(delegate: self)
+
+    var _blockProcessQueue = DispatchQueue(label: "LiveKitSDK.engine.pendingBlocks",
+                                           qos: .default)
+
+    var _queuedBlocks = [ConditionalExecutionEntry]()
+
     struct State: Equatable {
-        var options: RoomOptions
+        // Options
+        var connectOptions: ConnectOptions
+        var roomOptions: RoomOptions
 
         var sid: Sid?
         var name: String?
@@ -119,13 +133,31 @@ public class Room: NSObject, ObservableObject, Loggable {
 
         var serverInfo: Livekit_ServerInfo?
 
+        // Engine
+        var url: URL?
+        var token: String?
+        // preferred reconnect mode which will be used only for next attempt
+        var nextReconnectMode: ReconnectMode?
+        var isReconnectingWithMode: ReconnectMode?
+        var connectionState: ConnectionState = .disconnected
+        var disconnectError: LiveKitError?
+        var connectStopwatch = Stopwatch(label: "connect")
+        var hasPublished: Bool = false
+
+        var publisher: Transport?
+        var subscriber: Transport?
+        var isSubscriberPrimary: Bool = false
+
+        // Agents
+        var transcriptionReceivedTimes: [String: Date] = [:]
+
         @discardableResult
         mutating func updateRemoteParticipant(info: Livekit_ParticipantInfo, room: Room) -> RemoteParticipant {
             let identity = Participant.Identity(from: info.identity)
             // Check if RemoteParticipant with same identity exists...
             if let participant = remoteParticipants[identity] { return participant }
             // Create new RemoteParticipant...
-            let participant = RemoteParticipant(info: info, room: room)
+            let participant = RemoteParticipant(info: info, room: room, connectionState: connectionState)
             remoteParticipants[identity] = participant
             return participant
         }
@@ -136,7 +168,7 @@ public class Room: NSObject, ObservableObject, Loggable {
         }
     }
 
-    var _state: StateSync<State>
+    let _state: StateSync<State>
 
     private let _sidCompleter = AsyncCompleter<Sid>(label: "sid", defaultTimeout: .resolveSid)
 
@@ -156,17 +188,16 @@ public class Room: NSObject, ObservableObject, Loggable {
     {
         DeviceManager.prepare()
 
-        _state = StateSync(State(options: roomOptions ?? RoomOptions()))
-        engine = Engine(connectOptions: connectOptions ?? ConnectOptions())
+        _state = StateSync(State(connectOptions: connectOptions ?? ConnectOptions(),
+                                 roomOptions: roomOptions ?? RoomOptions()))
+
         super.init()
+        // log sdk & os versions
+        log("sdk: \(LiveKitSDK.version), os: \(String(describing: Utils.os()))(\(Utils.osVersionString())), modelId: \(String(describing: Utils.modelIdentifier() ?? "unknown"))")
+
+        signalClient._delegate.set(delegate: self)
 
         log()
-
-        // weak ref
-        engine._room = self
-
-        // listen to engine & signalClient
-        engine._delegate.set(delegate: self)
 
         if let delegate {
             log("delegate: \(String(describing: delegate))")
@@ -187,7 +218,7 @@ public class Room: NSObject, ObservableObject, Loggable {
                 self._sidCompleter.resume(returning: sid)
             }
 
-            if case .connected = self.engine._state.connectionState {
+            if case .connected = newState.connectionState {
                 // metadata updated
                 if let metadata = newState.metadata, metadata != oldState.metadata,
                    // don't notify if empty string (first time only)
@@ -203,6 +234,35 @@ public class Room: NSObject, ObservableObject, Loggable {
                     self.delegates.notify(label: { "room.didUpdate isRecording: \(newState.isRecording)" }) {
                         $0.room?(self, didUpdateIsRecording: newState.isRecording)
                     }
+                }
+            }
+
+            if newState.connectionState == .reconnecting, newState.isReconnectingWithMode == nil {
+                self.log("reconnectMode should not be .none", .error)
+            }
+
+            if (newState.connectionState != oldState.connectionState) || (newState.isReconnectingWithMode != oldState.isReconnectingWithMode) {
+                self.log("connectionState: \(oldState.connectionState) -> \(newState.connectionState), reconnectMode: \(String(describing: newState.isReconnectingWithMode))")
+            }
+
+            self.engine(self, didMutateState: newState, oldState: oldState)
+
+            // execution control
+            self._blockProcessQueue.async { [weak self] in
+                guard let self, !self._queuedBlocks.isEmpty else { return }
+
+                self.log("[execution control] processing pending entries (\(self._queuedBlocks.count))...")
+
+                self._queuedBlocks.removeAll { entry in
+                    // return and remove this entry if matches remove condition
+                    guard !entry.removeCondition(newState, oldState) else { return true }
+                    // return but don't remove this entry if doesn't match execute condition
+                    guard entry.executeCondition(newState, oldState) else { return false }
+
+                    self.log("[execution control] condition matching block...")
+                    entry.block()
+                    // remove this entry
+                    return true
                 }
             }
 
@@ -223,25 +283,61 @@ public class Room: NSObject, ObservableObject, Loggable {
                         connectOptions: ConnectOptions? = nil,
                         roomOptions: RoomOptions? = nil) async throws
     {
-        log("connecting to room...", .info)
+        guard let url = URL(string: url), url.isValidForSocket else {
+            log("URL parse failed", .error)
+            throw LiveKitError(.failedToParseUrl)
+        }
+
+        log("Connecting to room...", .info)
 
         var state = _state.copy()
 
         // update options if specified
-        if let roomOptions, roomOptions != state.options {
+        if let roomOptions, roomOptions != state.roomOptions {
             state = _state.mutate {
-                $0.options = roomOptions
+                $0.roomOptions = roomOptions
                 return $0
             }
         }
 
+        // update options if specified
+        if let connectOptions, connectOptions != _state.connectOptions {
+            _state.mutate { $0.connectOptions = connectOptions }
+        }
+
         // enable E2EE
-        if let e2eeOptions = state.options.e2eeOptions {
+        if let e2eeOptions = state.roomOptions.e2eeOptions {
             e2eeManager = E2EEManager(e2eeOptions: e2eeOptions)
             e2eeManager!.setup(room: self)
         }
 
-        try await engine.connect(url, token, connectOptions: connectOptions)
+        await cleanUp()
+
+        try Task.checkCancellation()
+
+        _state.mutate { $0.connectionState = .connecting }
+
+        do {
+            try await fullConnectSequence(url, token)
+
+            // Connect sequence successful
+            log("Connect sequence completed")
+
+            // Final check if cancelled, don't fire connected events
+            try Task.checkCancellation()
+
+            // update internal vars (only if connect succeeded)
+            _state.mutate {
+                $0.url = url
+                $0.token = token
+                $0.connectionState = .connected
+            }
+
+        } catch {
+            await cleanUp(withError: error)
+            // Re-throw error
+            throw error
+        }
 
         log("Connected to \(String(describing: self))", .info)
     }
@@ -252,7 +348,7 @@ public class Room: NSObject, ObservableObject, Loggable {
         if case .disconnected = connectionState { return }
 
         do {
-            try await engine.signalClient.sendLeave()
+            try await signalClient.sendLeave()
         } catch {
             log("Failed to send leave with error: \(error)")
         }
@@ -268,31 +364,15 @@ extension Room {
     func cleanUp(withError disconnectError: Error? = nil,
                  isFullReconnect: Bool = false) async
     {
-        log("withError: \(String(describing: disconnectError))")
+        log("withError: \(String(describing: disconnectError)), isFullReconnect: \(isFullReconnect)")
 
-        // Start Engine cleanUp sequence
+        // Reset completers
+        _sidCompleter.reset()
+        primaryTransportConnectedCompleter.reset()
+        publisherTransportConnectedCompleter.reset()
 
-        engine._state.mutate {
-            // if isFullReconnect, keep connection related states
-            $0 = isFullReconnect ? Engine.State(
-                connectOptions: $0.connectOptions,
-                url: $0.url,
-                token: $0.token,
-                nextReconnectMode: $0.nextReconnectMode,
-                isReconnectingWithMode: $0.isReconnectingWithMode,
-                connectionState: $0.connectionState
-            ) : Engine.State(
-                connectOptions: $0.connectOptions,
-                connectionState: .disconnected,
-                disconnectError: LiveKitError.from(error: disconnectError)
-            )
-        }
-
-        engine.primaryTransportConnectedCompleter.reset()
-        engine.publisherTransportConnectedCompleter.reset()
-
-        await engine.signalClient.cleanUp(withError: disconnectError)
-        await engine.cleanUpRTC()
+        await signalClient.cleanUp(withError: disconnectError)
+        await cleanUpRTC()
         await cleanUpParticipants(isFullReconnect: isFullReconnect)
 
         // Cleanup for E2EE
@@ -301,10 +381,23 @@ extension Room {
         }
 
         // Reset state
-        _state.mutate { $0 = State(options: $0.options) }
-
-        // Reset completers
-        _sidCompleter.reset()
+        _state.mutate {
+            // if isFullReconnect, keep connection related states
+            $0 = isFullReconnect ? State(
+                connectOptions: $0.connectOptions,
+                roomOptions: $0.roomOptions,
+                url: $0.url,
+                token: $0.token,
+                nextReconnectMode: $0.nextReconnectMode,
+                isReconnectingWithMode: $0.isReconnectingWithMode,
+                connectionState: $0.connectionState
+            ) : State(
+                connectOptions: $0.connectOptions,
+                roomOptions: $0.roomOptions,
+                connectionState: .disconnected,
+                disconnectError: LiveKitError.from(error: disconnectError)
+            )
+        }
     }
 }
 
@@ -327,6 +420,8 @@ extension Room {
                     await participant.cleanUp(notify: _notify)
                 }
             }
+
+            await group.waitForAll()
         }
 
         _state.mutate {
@@ -365,7 +460,7 @@ extension Room {
 
 extension Room: AppStateDelegate {
     func appDidEnterBackground() {
-        guard _state.options.suspendLocalVideoTracksInBackground else { return }
+        guard _state.roomOptions.suspendLocalVideoTracksInBackground else { return }
 
         let cameraVideoTracks = localParticipant.localVideoTracks.filter { $0.source == .camera }
 
@@ -405,6 +500,14 @@ extension Room: AppStateDelegate {
             await self.disconnect()
         }
     }
+
+    func appWillSleep() {
+        Task.detached {
+            await self.disconnect()
+        }
+    }
+
+    func appDidWake() {}
 }
 
 // MARK: - Devices
@@ -414,7 +517,20 @@ public extension Room {
     /// Must be set before RTCPeerConnectionFactory gets initialized.
     @objc
     static var bypassVoiceProcessing: Bool {
-        get { Engine.bypassVoiceProcessing }
-        set { Engine.bypassVoiceProcessing = newValue }
+        get { RTC.bypassVoiceProcessing }
+        set { RTC.bypassVoiceProcessing = newValue }
+    }
+}
+
+// MARK: - DataChannelDelegate
+
+extension Room: DataChannelDelegate {
+    func dataChannel(_: DataChannelPair, didReceiveDataPacket dataPacket: Livekit_DataPacket) {
+        switch dataPacket.value {
+        case let .speaker(update): engine(self, didUpdateSpeakers: update.speakers)
+        case let .user(userPacket): engine(self, didReceiveUserPacket: userPacket)
+        case let .transcription(packet): room(didReceiveTranscriptionPacket: packet)
+        default: return
+        }
     }
 }

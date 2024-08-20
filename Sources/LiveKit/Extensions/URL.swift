@@ -16,12 +16,12 @@
 
 import Foundation
 
-@_implementationOnly import LiveKitWebRTC
+extension URL {
+    var isValidForSocket: Bool {
+        host != nil && (scheme == "ws" || scheme == "wss")
+    }
 
-protocol EngineDelegate: AnyObject {
-    func engine(_ engine: Engine, didMutateState state: Engine.State, oldState: Engine.State) async
-    func engine(_ engine: Engine, didUpdateSpeakers speakers: [Livekit_SpeakerInfo]) async
-    func engine(_ engine: Engine, didAddTrack track: LKRTCMediaStreamTrack, rtpReceiver: LKRTCRtpReceiver, stream: LKRTCMediaStream) async
-    func engine(_ engine: Engine, didRemoveTrack track: LKRTCMediaStreamTrack) async
-    func engine(_ engine: Engine, didReceiveUserPacket packet: Livekit_UserPacket) async
+    var isSecure: Bool {
+        scheme == "https" || scheme == "wss"
+    }
 }

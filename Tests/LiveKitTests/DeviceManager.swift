@@ -17,8 +17,15 @@
 @testable import LiveKit
 import XCTest
 
-class Basic: XCTestCase {
-    func testReadVersion() {
-        print("LiveKitSDK.version: \(LiveKitSDK.version)")
+class DeviceManagerTests: XCTestCase {
+    func testListDevices() async throws {
+        let devices = try await DeviceManager.shared.devices()
+        print("Devices: \(devices.map { "(facingPosition: \(String(describing: $0.facingPosition)))" }.joined(separator: ", "))")
+        XCTAssert(devices.count > 0, "No capture devices found.")
+
+        // visionOS will return 0 formats.
+        guard let firstDevice = devices.first else { return }
+        let formats = firstDevice.formats
+        XCTAssert(formats.count > 0, "No formats found for device.")
     }
 }

@@ -15,9 +15,12 @@
  */
 
 import CoreMedia
-import Foundation
 
+#if swift(>=5.9)
+internal import LiveKitWebRTC
+#else
 @_implementationOnly import LiveKitWebRTC
+#endif
 
 @objc
 public class RemoteAudioTrack: Track, RemoteTrack, AudioTrack {
@@ -92,7 +95,7 @@ public class RemoteAudioTrack: Track, RemoteTrack, AudioTrack {
 extension RemoteAudioTrack: AudioRenderer {
     public func render(sampleBuffer: CMSampleBuffer) {
         _rendererState.audioRenderers.notify { audioRenderer in
-            audioRenderer.render(sampleBuffer: sampleBuffer)
+            audioRenderer.render?(sampleBuffer: sampleBuffer)
         }
     }
 }

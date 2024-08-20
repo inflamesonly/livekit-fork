@@ -16,7 +16,11 @@
 
 import Foundation
 
+#if swift(>=5.9)
+internal import LiveKitWebRTC
+#else
 @_implementationOnly import LiveKitWebRTC
+#endif
 
 protocol VideoCapturerProtocol {
     var capturer: LKRTCVideoCapturer { get }
@@ -227,6 +231,7 @@ extension VideoCapturer {
         if rendererDelegates.isDelegatesNotEmpty {
             if let lkVideoFrame = frame.toLKType() {
                 rendererDelegates.notify { renderer in
+                    renderer.render?(frame: lkVideoFrame)
                     renderer.render?(frame: lkVideoFrame, captureDevice: device, captureOptions: options)
                 }
             }

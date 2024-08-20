@@ -16,7 +16,11 @@
 
 import Foundation
 
+#if swift(>=5.9)
+internal import LiveKitWebRTC
+#else
 @_implementationOnly import LiveKitWebRTC
+#endif
 
 @objc
 public class Track: NSObject, Loggable {
@@ -103,9 +107,6 @@ public class Track: NSObject, Loggable {
 
     let mediaTrack: LKRTCMediaStreamTrack
 
-    // Weak reference to all VideoViews attached to this track. Must be accessed from main thread.
-    var videoRenderers = NSHashTable<VideoRenderer>.weakObjects()
-
     struct State {
         let name: String
         let kind: Kind
@@ -129,6 +130,9 @@ public class Track: NSObject, Loggable {
         var rtpSender: LKRTCRtpSender?
         var rtpSenderForCodec: [VideoCodec: LKRTCRtpSender] = [:] // simulcastSender
         var rtpReceiver: LKRTCRtpReceiver?
+
+        // Weak reference to all VideoRenderers attached to this track.
+        var videoRenderers = NSHashTable<VideoRenderer>.weakObjects()
     }
 
     let _state: StateSync<State>
@@ -199,12 +203,12 @@ public class Track: NSObject, Loggable {
         }
 
         if shouldStart {
-            await _statisticsTimer.setTimerBlock { [weak self] in
+            _statisticsTimer.setTimerBlock { [weak self] in
                 await self?._onStatsTimer()
             }
-            await _statisticsTimer.restart()
+            _statisticsTimer.restart()
         } else {
-            await _statisticsTimer.cancel()
+            _statisticsTimer.cancel()
         }
     }
 
@@ -353,41 +357,6 @@ extension Track {
     }
 }
 
-// MARK: - VideoTrack
-
-// workaround for error:
-// @objc can only be used with members of classes, @objc protocols, and concrete extensions of classes
-//
-extension Track {
-    func _add(videoRenderer: VideoRenderer) {
-        guard self is VideoTrack, let rtcVideoTrack = mediaTrack as? LKRTCVideoTrack else {
-            log("mediaTrack is not a RTCVideoTrack", .error)
-            return
-        }
-
-        if !Thread.current.isMainThread {
-            log("Must be called on main thread", .error)
-        }
-
-        videoRenderers.add(videoRenderer)
-        rtcVideoTrack.add(VideoRendererAdapter(target: videoRenderer, localVideoTrack: self as? LocalVideoTrack))
-    }
-
-    func _remove(videoRenderer: VideoRenderer) {
-        guard self is VideoTrack, let rtcVideoTrack = mediaTrack as? LKRTCVideoTrack else {
-            log("mediaTrack is not a RTCVideoTrack", .error)
-            return
-        }
-
-        if !Thread.current.isMainThread {
-            log("Must be called on main thread", .error)
-        }
-
-        videoRenderers.remove(videoRenderer)
-        rtcVideoTrack.remove(VideoRendererAdapter(target: videoRenderer, localVideoTrack: self as? LocalVideoTrack))
-    }
-}
-
 // MARK: - Identifiable (SwiftUI)
 
 extension Track: Identifiable {
@@ -437,8 +406,25 @@ public extension InboundRtpStreamStatistics {
         guard let previous,
               let currentBytesReceived = bytesReceived,
               let previousBytesReceived = previous.bytesReceived else { return 0 }
+
         let secondsDiff = (timestamp - previous.timestamp) / (1000 * 1000)
-        return UInt64(Double((currentBytesReceived - previousBytesReceived) * 8) / abs(secondsDiff))
+
+        // Ensure secondsDiff is not zero or negative
+        guard secondsDiff > 0 else { return 0 }
+
+        // Calculate the difference in bytes received
+        let bytesDiff = currentBytesReceived.subtractingReportingOverflow(previousBytesReceived)
+
+        // Check for overflow in bytes difference
+        guard !bytesDiff.overflow else { return 0 }
+
+        // Calculate bits per second as a Double
+        let bpsDouble = Double(bytesDiff.partialValue * 8) / Double(secondsDiff)
+
+        // Ensure the result is non-negative and fits into UInt64
+        guard bpsDouble >= 0, bpsDouble <= Double(UInt64.max) else { return 0 }
+
+        return UInt64(bpsDouble)
     }
 }
 

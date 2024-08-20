@@ -16,7 +16,11 @@
 
 import Foundation
 
+#if swift(>=5.9)
+internal import LiveKitWebRTC
+#else
 @_implementationOnly import LiveKitWebRTC
+#endif
 
 actor SignalClient: Loggable {
     // MARK: - Types
@@ -106,7 +110,7 @@ actor SignalClient: Loggable {
     }
 
     @discardableResult
-    func connect(_ urlString: String,
+    func connect(_ url: URL,
                  _ token: String,
                  connectOptions: ConnectOptions? = nil,
                  reconnectMode: ReconnectMode? = nil,
@@ -118,14 +122,11 @@ actor SignalClient: Loggable {
             log("[Connect] mode: \(String(describing: reconnectMode))")
         }
 
-        guard let url = Utils.buildUrl(urlString,
-                                       token,
-                                       connectOptions: connectOptions,
-                                       reconnectMode: reconnectMode,
-                                       adaptiveStream: adaptiveStream)
-        else {
-            throw LiveKitError(.failedToParseUrl)
-        }
+        let url = try Utils.buildUrl(url,
+                                     token,
+                                     connectOptions: connectOptions,
+                                     reconnectMode: reconnectMode,
+                                     adaptiveStream: adaptiveStream)
 
         if reconnectMode != nil {
             log("[Connect] with url: \(url)")
@@ -175,14 +176,11 @@ actor SignalClient: Loggable {
             await cleanUp(withError: error)
 
             // Validate...
-            guard let validateUrl = Utils.buildUrl(urlString,
-                                                   token,
-                                                   connectOptions: connectOptions,
-                                                   adaptiveStream: adaptiveStream,
-                                                   validate: true)
-            else {
-                throw LiveKitError(.failedToParseUrl, message: "Failed to parse validation url")
-            }
+            let validateUrl = try Utils.buildUrl(url,
+                                                 token,
+                                                 connectOptions: connectOptions,
+                                                 adaptiveStream: adaptiveStream,
+                                                 validate: true)
 
             log("Validating with url: \(validateUrl)...")
             let validationResponse = try await HTTP.requestString(from: validateUrl)
@@ -195,8 +193,8 @@ actor SignalClient: Loggable {
     func cleanUp(withError disconnectError: Error? = nil) async {
         log("withError: \(String(describing: disconnectError))")
 
-        await _pingIntervalTimer.cancel()
-        await _pingTimeoutTimer.cancel()
+        _pingIntervalTimer.cancel()
+        _pingTimeoutTimer.cancel()
 
         _messageLoopTask?.cancel()
         _messageLoopTask = nil
@@ -232,7 +230,7 @@ private extension SignalClient {
     func _onWebSocketMessage(message: URLSessionWebSocketTask.Message) async {
         let response: Livekit_SignalResponse? = {
             switch message {
-            case let .data(data): return try? Livekit_SignalResponse(contiguousBytes: data)
+            case let .data(data): return try? Livekit_SignalResponse(serializedData: data)
             case let .string(string): return try? Livekit_SignalResponse(jsonString: string)
             default: return nil
             }
@@ -285,7 +283,7 @@ private extension SignalClient {
             _delegate.notifyDetached { await $0.signalClient(self, didReceiveOffer: sd.toRTCType()) }
 
         case let .trickle(trickle):
-            guard let rtcCandidate = try? Engine.createIceCandidate(fromJsonString: trickle.candidateInit) else {
+            guard let rtcCandidate = try? RTC.createIceCandidate(fromJsonString: trickle.candidateInit) else {
                 return
             }
 
@@ -298,9 +296,6 @@ private extension SignalClient {
             _delegate.notifyDetached { await $0.signalClient(self, didUpdateRoom: update.room) }
 
         case let .trackPublished(trackPublished):
-            // not required to be handled because we use completer pattern for this case
-            _delegate.notifyDetached { await $0.signalClient(self, didPublishLocalTrack: trackPublished) }
-
             log("[publish] resolving completer for cid: \(trackPublished.cid)")
             // Complete
             await _addTrackCompleters.resume(returning: trackPublished.track, for: trackPublished.cid)
@@ -338,10 +333,16 @@ private extension SignalClient {
             await _onReceivedPong(r)
 
         case .pongResp:
-            log("received pongResp message")
+            log("Received pongResp message")
 
         case .subscriptionResponse:
-            log("received subscriptionResponse message")
+            log("Received subscriptionResponse message")
+
+        case .errorResponse:
+            log("Received errorResponse message")
+
+        case .trackSubscribed:
+            log("Received trackSubscribed message")
         }
     }
 }
@@ -488,11 +489,26 @@ extension SignalClient {
         try await _sendRequest(r)
     }
 
-    func sendUpdateParticipant(metadata: String? = nil, name: String? = nil) async throws {
+    func sendUpdateParticipant(name: String? = nil,
+                               metadata: String? = nil,
+                               attributes: [String: String]? = nil) async throws
+    {
         let r = Livekit_SignalRequest.with {
             $0.updateMetadata = Livekit_UpdateParticipantMetadata.with {
-                $0.metadata = metadata ?? ""
                 $0.name = name ?? ""
+                $0.metadata = metadata ?? ""
+                $0.attributes = attributes ?? [:]
+            }
+        }
+
+        try await _sendRequest(r)
+    }
+
+    func sendUpdateLocalAudioTrack(trackSid: Track.Sid, features: Set<Livekit_AudioTrackFeature>) async throws {
+        let r = Livekit_SignalRequest.with {
+            $0.updateAudioTrack = Livekit_UpdateLocalAudioTrack.with {
+                $0.trackSid = trackSid.stringValue
+                $0.features = Array(features)
             }
         }
 
@@ -582,26 +598,26 @@ private extension SignalClient {
         log("ping/pong sending ping...", .trace)
         try await _sendPing()
 
-        await _pingTimeoutTimer.setTimerInterval(TimeInterval(jr.pingTimeout))
-        await _pingTimeoutTimer.setTimerBlock { [weak self] in
+        _pingTimeoutTimer.setTimerInterval(TimeInterval(jr.pingTimeout))
+        _pingTimeoutTimer.setTimerBlock { [weak self] in
             guard let self else { return }
             self.log("ping/pong timed out", .error)
             await self.cleanUp(withError: LiveKitError(.serverPingTimedOut))
         }
 
-        await _pingTimeoutTimer.startIfStopped()
+        _pingTimeoutTimer.startIfStopped()
     }
 
     func _onReceivedPong(_: Int64) async {
         log("ping/pong received pong from server", .trace)
         // Clear timeout timer
-        await _pingTimeoutTimer.cancel()
+        _pingTimeoutTimer.cancel()
     }
 
     func _restartPingTimer() async {
         // Always cancel first...
-        await _pingIntervalTimer.cancel()
-        await _pingTimeoutTimer.cancel()
+        _pingIntervalTimer.cancel()
+        _pingTimeoutTimer.cancel()
 
         // Check previously received joinResponse
         guard let jr = _lastJoinResponse,
@@ -612,12 +628,12 @@ private extension SignalClient {
         log("ping/pong starting with interval: \(jr.pingInterval), timeout: \(jr.pingTimeout)")
 
         // Update interval...
-        await _pingIntervalTimer.setTimerInterval(TimeInterval(jr.pingInterval))
-        await _pingIntervalTimer.setTimerBlock { [weak self] in
+        _pingIntervalTimer.setTimerInterval(TimeInterval(jr.pingInterval))
+        _pingIntervalTimer.setTimerBlock { [weak self] in
             guard let self else { return }
             try await self._onPingIntervalTimer()
         }
-        await _pingIntervalTimer.restart()
+        _pingIntervalTimer.restart()
     }
 }
 

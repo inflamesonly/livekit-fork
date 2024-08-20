@@ -16,9 +16,13 @@
 
 import Accelerate
 import AVFoundation
-import Foundation
+import Combine
 
+#if swift(>=5.9)
+internal import LiveKitWebRTC
+#else
 @_implementationOnly import LiveKitWebRTC
+#endif
 
 // Wrapper for LKRTCAudioBuffer
 @objc
@@ -53,50 +57,15 @@ public class LKAudioBuffer: NSObject {
     }
 }
 
-@objc
-public protocol AudioCustomProcessingDelegate {
-    func audioProcessingInitialize(sampleRate sampleRateHz: Int, channels: Int)
-    func audioProcessingProcess(audioBuffer: LKAudioBuffer)
-    func audioProcessingRelease()
-}
-
-class AudioCustomProcessingDelegateAdapter: NSObject, LKRTCAudioCustomProcessingDelegate {
-    weak var target: AudioCustomProcessingDelegate?
-
-    init(target: AudioCustomProcessingDelegate? = nil) {
-        self.target = target
-    }
-
-    func audioProcessingInitialize(sampleRate sampleRateHz: Int, channels: Int) {
-        target?.audioProcessingInitialize(sampleRate: sampleRateHz, channels: channels)
-    }
-
-    func audioProcessingProcess(audioBuffer: LKRTCAudioBuffer) {
-        target?.audioProcessingProcess(audioBuffer: LKAudioBuffer(audioBuffer: audioBuffer))
-    }
-
-    func audioProcessingRelease() {
-        target?.audioProcessingRelease()
-    }
-
-    // Proxy the equality operators
-
-    override func isEqual(_ object: Any?) -> Bool {
-        guard let other = object as? AudioCustomProcessingDelegateAdapter else { return false }
-        return target === other.target
-    }
-
-    override var hash: Int {
-        guard let target else { return 0 }
-        return ObjectIdentifier(target).hashValue
-    }
-}
-
 // Audio Session Configuration related
 public class AudioManager: Loggable {
     // MARK: - Public
 
+    #if compiler(>=6.0)
+    public nonisolated(unsafe) static let shared = AudioManager()
+    #else
     public static let shared = AudioManager()
+    #endif
 
     public typealias ConfigureAudioSessionFunc = (_ newState: State,
                                                   _ oldState: State) -> Void
@@ -156,24 +125,29 @@ public class AudioManager: Loggable {
 
     private lazy var capturePostProcessingDelegateAdapter: AudioCustomProcessingDelegateAdapter = {
         let adapter = AudioCustomProcessingDelegateAdapter(target: nil)
-        Engine.audioProcessingModule.capturePostProcessingDelegate = adapter
+        RTC.audioProcessingModule.capturePostProcessingDelegate = adapter
         return adapter
     }()
 
     private lazy var renderPreProcessingDelegateAdapter: AudioCustomProcessingDelegateAdapter = {
         let adapter = AudioCustomProcessingDelegateAdapter(target: nil)
-        Engine.audioProcessingModule.renderPreProcessingDelegate = adapter
+        RTC.audioProcessingModule.renderPreProcessingDelegate = adapter
         return adapter
     }()
 
+    let capturePostProcessingDelegateSubject = CurrentValueSubject<AudioCustomProcessingDelegate?, Never>(nil)
+
     public var capturePostProcessingDelegate: AudioCustomProcessingDelegate? {
         get { capturePostProcessingDelegateAdapter.target }
-        set { capturePostProcessingDelegateAdapter.target = newValue }
+        set {
+            capturePostProcessingDelegateAdapter.set(target: newValue)
+            capturePostProcessingDelegateSubject.send(newValue)
+        }
     }
 
     public var renderPreProcessingDelegate: AudioCustomProcessingDelegate? {
         get { renderPreProcessingDelegateAdapter.target }
-        set { renderPreProcessingDelegateAdapter.target = newValue }
+        set { renderPreProcessingDelegateAdapter.set(target: newValue) }
     }
 
     // MARK: - AudioDeviceModule
@@ -183,26 +157,26 @@ public class AudioManager: Loggable {
     public let defaultInputDevice = AudioDevice(ioDevice: LKRTCIODevice.defaultDevice(with: .input))
 
     public var outputDevices: [AudioDevice] {
-        Engine.audioDeviceModule.outputDevices.map { AudioDevice(ioDevice: $0) }
+        RTC.audioDeviceModule.outputDevices.map { AudioDevice(ioDevice: $0) }
     }
 
     public var inputDevices: [AudioDevice] {
-        Engine.audioDeviceModule.inputDevices.map { AudioDevice(ioDevice: $0) }
+        RTC.audioDeviceModule.inputDevices.map { AudioDevice(ioDevice: $0) }
     }
 
     public var outputDevice: AudioDevice {
-        get { AudioDevice(ioDevice: Engine.audioDeviceModule.outputDevice) }
-        set { Engine.audioDeviceModule.outputDevice = newValue._ioDevice }
+        get { AudioDevice(ioDevice: RTC.audioDeviceModule.outputDevice) }
+        set { RTC.audioDeviceModule.outputDevice = newValue._ioDevice }
     }
 
     public var inputDevice: AudioDevice {
-        get { AudioDevice(ioDevice: Engine.audioDeviceModule.inputDevice) }
-        set { Engine.audioDeviceModule.inputDevice = newValue._ioDevice }
+        get { AudioDevice(ioDevice: RTC.audioDeviceModule.inputDevice) }
+        set { RTC.audioDeviceModule.inputDevice = newValue._ioDevice }
     }
 
     public var onDeviceUpdate: DeviceUpdateFunc? {
         didSet {
-            Engine.audioDeviceModule.setDevicesUpdatedHandler { [weak self] in
+            RTC.audioDeviceModule.setDevicesUpdatedHandler { [weak self] in
                 guard let self else { return }
                 self.onDeviceUpdate?(self)
             }
@@ -339,4 +313,31 @@ public class AudioManager: Loggable {
         }
     }
     #endif
+}
+
+public extension AudioManager {
+    /// Add an ``AudioRenderer`` to receive pcm buffers from local input (mic).
+    /// Only ``AudioRenderer/render(pcmBuffer:)`` will be called.
+    /// Usage: `AudioManager.shared.add(localAudioRenderer: localRenderer)`
+    func add(localAudioRenderer delegate: AudioRenderer) {
+        capturePostProcessingDelegateAdapter.audioRenderers.add(delegate: delegate)
+    }
+
+    func remove(localAudioRenderer delegate: AudioRenderer) {
+        capturePostProcessingDelegateAdapter.audioRenderers.remove(delegate: delegate)
+    }
+}
+
+public extension AudioManager {
+    /// Add an ``AudioRenderer`` to receive pcm buffers from combined remote audio.
+    /// Only ``AudioRenderer/render(pcmBuffer:)`` will be called.
+    /// To receive buffer for individual tracks, use ``RemoteAudioTrack/add(audioRenderer:)`` instead.
+    /// Usage: `AudioManager.shared.add(remoteAudioRenderer: localRenderer)`
+    func add(remoteAudioRenderer delegate: AudioRenderer) {
+        renderPreProcessingDelegateAdapter.audioRenderers.add(delegate: delegate)
+    }
+
+    func remove(remoteAudioRenderer delegate: AudioRenderer) {
+        renderPreProcessingDelegateAdapter.audioRenderers.remove(delegate: delegate)
+    }
 }

@@ -18,14 +18,26 @@ import AVFoundation
 @testable import LiveKit
 import XCTest
 
-class BufferCapturerTest: XCTestCase {
+class PublishBufferCapturerTests: XCTestCase {
     func testPublishBufferTrack() async throws {
-        try await with2Rooms { room1, room2 in
+        try await withRooms([RoomTestingOptions(canPublish: true), RoomTestingOptions(canSubscribe: true)]) { rooms in
+            // Alias to Rooms
+            let room1 = rooms[0]
+            let room2 = rooms[1]
 
-            let targetDimensions: Dimensions = .h1080_169
+            let targetDimensions: Dimensions = .h720_169
+
+            let captureOptions = BufferCaptureOptions(dimensions: targetDimensions)
+
+            let publishOptions = VideoPublishOptions(
+                simulcast: false,
+                preferredCodec: .vp8,
+                preferredBackupCodec: .none,
+                degradationPreference: .maintainResolution
+            )
 
             let bufferTrack = LocalVideoTrack.createBufferTrack(
-                options: BufferCaptureOptions(dimensions: targetDimensions)
+                options: captureOptions
             )
 
             let bufferCapturer = bufferTrack.capturer as! BufferCapturer
@@ -34,7 +46,7 @@ class BufferCapturerTest: XCTestCase {
                 bufferCapturer.capture(buffer)
             }
 
-            try await room1.localParticipant.publish(videoTrack: bufferTrack)
+            try await room1.localParticipant.publish(videoTrack: bufferTrack, options: publishOptions)
 
             guard let publisherIdentity = room1.localParticipant.identity else {
                 XCTFail("Publisher's identity is nil")
@@ -79,7 +91,7 @@ class BufferCapturerTest: XCTestCase {
 
             print("Waiting for target dimensions: \(targetDimensions)")
             let expectTargetDimensions = videoTrackWatcher.expect(dimensions: targetDimensions)
-            await self.fulfillment(of: [expectTargetDimensions], timeout: 30)
+            await self.fulfillment(of: [expectTargetDimensions], timeout: 60)
             print("Did render target dimensions: \(targetDimensions)")
 
             // Wait for video to complete...

@@ -16,7 +16,11 @@
 
 import Foundation
 
+#if swift(>=5.9)
+internal import LiveKitWebRTC
+#else
 @_implementationOnly import LiveKitWebRTC
+#endif
 
 @objc
 public class AudioCaptureOptions: NSObject, CaptureOptions {
@@ -77,5 +81,16 @@ public class AudioCaptureOptions: NSObject, CaptureOptions {
         hasher.combine(experimentalNoiseSuppression)
         hasher.combine(experimentalAutoGainControl)
         return hasher.finalize()
+    }
+}
+
+// Internal
+extension AudioCaptureOptions {
+    func toFeatures() -> Set<Livekit_AudioTrackFeature> {
+        Set([
+            echoCancellation ? .tfEchoCancellation : nil,
+            noiseSuppression ? .tfNoiseSuppression : nil,
+            autoGainControl ? .tfAutoGainControl : nil,
+        ].compactMap { $0 })
     }
 }

@@ -35,7 +35,19 @@ extension XCTestCase {
         let asset = AVAsset(url: tempLocalUrl)
         let assetReader = try AVAssetReader(asset: asset)
 
-        guard let track = asset.tracks(withMediaType: .video).first else {
+        let tracks = try await {
+            #if os(visionOS)
+            return try await asset.loadTracks(withMediaType: .video)
+            #else
+            if #available(iOS 15.0, macOS 12.0, *) {
+                return try await asset.loadTracks(withMediaType: .video)
+            } else {
+                return asset.tracks(withMediaType: .video)
+            }
+            #endif
+        }()
+
+        guard let track = tracks.first else {
             XCTFail("No video track found in sample video file")
             fatalError()
         }
@@ -66,10 +78,11 @@ extension XCTestCase {
     }
 }
 
+typealias OnDidRenderFirstFrame = (_ id: String) -> Void
+
 class VideoTrackWatcher: TrackDelegate, VideoRenderer {
     // MARK: - Public
 
-    typealias OnDidRenderFirstFrame = (_ sid: String) -> Void
     public var didRenderFirstFrame: Bool { _state.didRenderFirstFrame }
 
     private struct State {
@@ -144,5 +157,42 @@ class VideoTrackWatcher: TrackDelegate, VideoRenderer {
         }
 
         print("\(type(of: self)) didUpdateStatistics (\(segments.joined(separator: ", ")))")
+    }
+}
+
+class AudioTrackWatcher: AudioRenderer {
+    public let id: String
+    public var didRenderFirstFrame: Bool { _state.didRenderFirstFrame }
+
+    // MARK: - Private
+
+    private let onDidRenderFirstFrame: OnDidRenderFirstFrame?
+
+    private struct State {
+        var didRenderFirstFrame: Bool = false
+    }
+
+    private let _state = StateSync(State())
+
+    init(id: String, onDidRenderFirstFrame: OnDidRenderFirstFrame? = nil) {
+        self.id = id
+        self.onDidRenderFirstFrame = onDidRenderFirstFrame
+    }
+
+    public func reset() {
+        _state.mutate {
+            $0.didRenderFirstFrame = false
+        }
+    }
+
+    func render(sampleBuffer: CMSampleBuffer) {
+        print("did receive first audio frame: \(String(describing: sampleBuffer))")
+
+        _state.mutate {
+            if !$0.didRenderFirstFrame {
+                $0.didRenderFirstFrame = true
+                onDidRenderFirstFrame?(id)
+            }
+        }
     }
 }

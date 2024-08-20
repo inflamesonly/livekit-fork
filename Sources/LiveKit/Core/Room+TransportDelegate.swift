@@ -16,7 +16,11 @@
 
 import Foundation
 
+#if swift(>=5.9)
+internal import LiveKitWebRTC
+#else
 @_implementationOnly import LiveKitWebRTC
+#endif
 
 extension RTCPeerConnectionState {
     var isConnected: Bool {
@@ -28,7 +32,7 @@ extension RTCPeerConnectionState {
     }
 }
 
-extension Engine: TransportDelegate {
+extension Room: TransportDelegate {
     func transport(_ transport: Transport, didUpdateState pcState: RTCPeerConnectionState) async {
         log("target: \(transport.target), connectionState: \(pcState.description)")
 
@@ -84,24 +88,26 @@ extension Engine: TransportDelegate {
                     removeWhen: { state, _ in state.connectionState == .disconnected })
             { [weak self] in
                 guard let self else { return }
-                self._delegate.notifyDetached { await $0.engine(self, didAddTrack: track, rtpReceiver: rtpReceiver, stream: streams.first!) }
+                Task {
+                    await self.engine(self, didAddTrack: track, rtpReceiver: rtpReceiver, stream: streams.first!)
+                }
             }
         }
     }
 
     func transport(_ transport: Transport, didRemoveTrack track: LKRTCMediaStreamTrack) async {
         if transport.target == .subscriber {
-            _delegate.notifyDetached { await $0.engine(self, didRemoveTrack: track) }
+            await engine(self, didRemoveTrack: track)
         }
     }
 
     func transport(_ transport: Transport, didOpenDataChannel dataChannel: LKRTCDataChannel) async {
         log("Server opened data channel \(dataChannel.label)(\(dataChannel.readyState))")
 
-        if subscriberPrimary, transport.target == .subscriber {
+        if _state.isSubscriberPrimary, transport.target == .subscriber {
             switch dataChannel.label {
-            case LKRTCDataChannel.labels.reliable: await subscriberDataChannel.set(reliable: dataChannel)
-            case LKRTCDataChannel.labels.lossy: await subscriberDataChannel.set(lossy: dataChannel)
+            case LKRTCDataChannel.labels.reliable: subscriberDataChannel.set(reliable: dataChannel)
+            case LKRTCDataChannel.labels.lossy: subscriberDataChannel.set(lossy: dataChannel)
             default: log("Unknown data channel label \(dataChannel.label)", .warning)
             }
         }

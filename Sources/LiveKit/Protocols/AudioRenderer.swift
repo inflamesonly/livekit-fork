@@ -14,15 +14,23 @@
  * limitations under the License.
  */
 
+import AVFoundation
 import CoreMedia
-import Foundation
 
+#if swift(>=5.9)
+internal import LiveKitWebRTC
+#else
 @_implementationOnly import LiveKitWebRTC
+#endif
 
 @objc
 public protocol AudioRenderer {
     /// CMSampleBuffer for this track.
+    @objc optional
     func render(sampleBuffer: CMSampleBuffer)
+
+    @objc optional
+    func render(pcmBuffer: AVAudioPCMBuffer)
 }
 
 class AudioRendererAdapter: NSObject, LKRTCAudioRenderer {
@@ -33,7 +41,7 @@ class AudioRendererAdapter: NSObject, LKRTCAudioRenderer {
     }
 
     func render(sampleBuffer: CMSampleBuffer) {
-        target?.render(sampleBuffer: sampleBuffer)
+        target?.render?(sampleBuffer: sampleBuffer)
     }
 
     // Proxy the equality operators

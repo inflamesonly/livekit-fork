@@ -16,7 +16,11 @@
 
 import Foundation
 
+#if swift(>=5.9)
+internal import LiveKitWebRTC
+#else
 @_implementationOnly import LiveKitWebRTC
+#endif
 
 public enum LiveKitErrorType: Int {
     case unknown = 0
@@ -46,6 +50,7 @@ public enum LiveKitErrorType: Int {
     case captureFormatNotFound = 702
     case unableToResolveFPSRange = 703
     case capturerDimensionsNotResolved = 704
+    case deviceAccessDenied = 705
 }
 
 extension LiveKitErrorType: CustomStringConvertible {
@@ -72,7 +77,7 @@ extension LiveKitErrorType: CustomStringConvertible {
         case .participantRemoved:
             return "Participant removed"
         case .roomDeleted:
-            return "Reoom deleted"
+            return "Room deleted"
         case .stateMismatch:
             return "Server state mismatch"
         case .joinFailure:
@@ -84,7 +89,7 @@ extension LiveKitErrorType: CustomStringConvertible {
         case .captureFormatNotFound:
             return "Capture format not found"
         case .unableToResolveFPSRange:
-            return "Unable to resolved FPS range"
+            return "Unable to resolve FPS range"
         case .capturerDimensionsNotResolved:
             return "Capturer dimensions not resolved"
         default: return "Unknown"
