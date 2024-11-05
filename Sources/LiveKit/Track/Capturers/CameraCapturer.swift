@@ -32,7 +32,7 @@ public class CameraCapturer: VideoCapturer {
     public var device: AVCaptureDevice? { _cameraCapturerState.device }
 
     /// Current position of the device
-    public var position: AVCaptureDevice.Position { _cameraCapturerState.device?.position ?? .unspecified }
+    public var position: AVCaptureDevice.Position { _cameraCapturerState.device?.position ?? .front }
 
     @objc
     public var options: CameraCaptureOptions { _cameraCapturerState.options }

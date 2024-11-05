@@ -60,7 +60,7 @@ public final class CameraCaptureOptions: NSObject, VideoCaptureOptions, Sendable
     @objc
     public init(deviceType: AVCaptureDevice.DeviceType? = nil,
                 device: AVCaptureDevice? = nil,
-                position: AVCaptureDevice.Position = .unspecified,
+                position: AVCaptureDevice.Position = .front,
                 preferredFormat: AVCaptureDevice.Format? = nil,
                 dimensions: Dimensions = .h720_169,
                 fps: Int = 30)
@@ -75,7 +75,7 @@ public final class CameraCaptureOptions: NSObject, VideoCaptureOptions, Sendable
     #else
     @objc
     public init(device: AVCaptureDevice? = nil,
-                position: AVCaptureDevice.Position = .unspecified,
+                position: AVCaptureDevice.Position = .front,
                 preferredFormat: AVCaptureDevice.Format? = nil,
                 dimensions: Dimensions = .h720_169,
                 fps: Int = 30)
