@@ -72,7 +72,7 @@ class DeviceManager: Loggable {
 
         return AVCaptureDevice.DiscoverySession(deviceTypes: deviceTypes,
                                                 mediaType: .video,
-                                                position: .unspecified)
+                                                position: .front)
     }()
     #endif
 

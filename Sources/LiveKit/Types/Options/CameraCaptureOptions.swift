@@ -50,7 +50,7 @@ public final class CameraCaptureOptions: NSObject, VideoCaptureOptions, Sendable
         deviceType = nil
         #endif
         device = nil
-        position = .unspecified
+        position = .front
         preferredFormat = nil
         dimensions = .h720_169
         fps = 30
