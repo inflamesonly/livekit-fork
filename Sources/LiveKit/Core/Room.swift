@@ -205,7 +205,7 @@ public class Room: NSObject, ObservableObject, Loggable {
         }
 
         // listen to app states
-        AppStateListener.shared.add(delegate: self)
+        AppStateListener.shared.delegates.add(delegate: self)
 
         // trigger events when state mutates
         _state.onDidMutate = { [weak self] newState, oldState in
@@ -283,7 +283,7 @@ public class Room: NSObject, ObservableObject, Loggable {
                         connectOptions: ConnectOptions? = nil,
                         roomOptions: RoomOptions? = nil) async throws
     {
-        guard let url = URL(string: url), url.isValidForSocket else {
+        guard let url = URL(string: url), url.isValidForConnect else {
             log("URL parse failed", .error)
             throw LiveKitError(.failedToParseUrl)
         }

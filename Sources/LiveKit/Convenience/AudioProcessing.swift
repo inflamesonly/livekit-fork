@@ -25,33 +25,31 @@ public struct AudioLevel {
 }
 
 public extension LKAudioBuffer {
-    /// Convert to AVAudioPCMBuffer float buffer will be normalized to 32 bit.
+    /// Convert to AVAudioPCMBuffer Int16 format.
     @objc
     func toAVAudioPCMBuffer() -> AVAudioPCMBuffer? {
-        guard let audioFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+        guard let audioFormat = AVAudioFormat(commonFormat: .pcmFormatInt16,
                                               sampleRate: Double(frames * 100),
                                               channels: AVAudioChannelCount(channels),
                                               interleaved: false),
             let pcmBuffer = AVAudioPCMBuffer(pcmFormat: audioFormat,
                                              frameCapacity: AVAudioFrameCount(frames))
-        else {
-            return nil
-        }
+        else { return nil }
 
         pcmBuffer.frameLength = AVAudioFrameCount(frames)
 
-        guard let targetBufferPointer = pcmBuffer.floatChannelData else { return nil }
-
-        // Optimized version
-        var normalizationFactor: Float = 1.0 / 32768.0
+        guard let targetBufferPointer = pcmBuffer.int16ChannelData else { return nil }
 
         for i in 0 ..< channels {
-            vDSP_vsmul(rawBuffer(forChannel: i),
-                       1,
-                       &normalizationFactor,
-                       targetBufferPointer[i],
-                       1,
-                       vDSP_Length(frames))
+            let sourceBuffer = rawBuffer(forChannel: i)
+            let targetBuffer = targetBufferPointer[i]
+            // sourceBuffer is in the format of [Int16] but is stored in 32-bit alignment, we need to pack the Int16 data correctly.
+
+            for frame in 0 ..< frames {
+                // Cast and pack the source 32-bit Int16 data into the target 16-bit buffer
+                let clampedValue = max(Float(Int16.min), min(Float(Int16.max), sourceBuffer[frame]))
+                targetBuffer[frame] = Int16(clampedValue)
+            }
         }
 
         return pcmBuffer
@@ -96,5 +94,69 @@ public extension Sequence where Iterator.Element == AudioLevel {
 
         return AudioLevel(average: totalSums.averageSum / Float(count),
                           peak: totalSums.peakSum / Float(count))
+    }
+}
+
+public class AudioVisualizeProcessor {
+    static let bufferSize = 1024
+
+    // MARK: - Public
+
+    public let minFrequency: Float
+    public let maxFrequency: Float
+    public let minDB: Float
+    public let maxDB: Float
+    public let bandsCount: Int
+
+    private var bands: [Float]?
+
+    // MARK: - Private
+
+    private let ringBuffer = RingBuffer<Float>(size: AudioVisualizeProcessor.bufferSize)
+    private let processor: FFTProcessor
+
+    public init(minFrequency: Float = 10,
+                maxFrequency: Float = 8000,
+                minDB: Float = -32.0,
+                maxDB: Float = 32.0,
+                bandsCount: Int = 100)
+    {
+        self.minFrequency = minFrequency
+        self.maxFrequency = maxFrequency
+        self.minDB = minDB
+        self.maxDB = maxDB
+        self.bandsCount = bandsCount
+
+        processor = FFTProcessor(bufferSize: Self.bufferSize)
+        bands = [Float](repeating: 0.0, count: bandsCount)
+    }
+
+    public func process(pcmBuffer: AVAudioPCMBuffer) -> [Float]? {
+        guard let pcmBuffer = pcmBuffer.convert(toCommonFormat: .pcmFormatFloat32) else { return nil }
+        guard let floatChannelData = pcmBuffer.floatChannelData else { return nil }
+
+        // Get the float array.
+        let floats = Array(UnsafeBufferPointer(start: floatChannelData[0], count: Int(pcmBuffer.frameLength)))
+        ringBuffer.write(floats)
+
+        // Get full-size buffer if available, otherwise return
+        guard let buffer = ringBuffer.read() else { return nil }
+
+        // Process FFT and compute frequency bands
+        let fftRes = processor.process(buffer: buffer)
+        let bands = fftRes.computeBands(
+            minFrequency: minFrequency,
+            maxFrequency: maxFrequency,
+            bandsCount: bandsCount,
+            sampleRate: Float(pcmBuffer.format.sampleRate)
+        )
+
+        let headroom = maxDB - minDB
+
+        // Normalize magnitudes (already in decibels)
+        return bands.magnitudes.map { magnitude in
+            let adjustedMagnitude = max(0, magnitude + abs(minDB))
+            return min(1.0, adjustedMagnitude / headroom)
+        }
     }
 }

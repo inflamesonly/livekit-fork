@@ -301,7 +301,7 @@ extension Room: SignalClientDelegate {
         }
     }
 
-    func signalClient(_: SignalClient, didReceiveIceCandidate iceCandidate: LKRTCIceCandidate, target: Livekit_SignalTarget) async {
+    func signalClient(_: SignalClient, didReceiveIceCandidate iceCandidate: IceCandidate, target: Livekit_SignalTarget) async {
         guard let transport = target == .subscriber ? _state.subscriber : _state.publisher else {
             log("Failed to add ice candidate, transport is nil for target: \(target)", .error)
             return
@@ -344,5 +344,23 @@ extension Room: SignalClientDelegate {
     func signalClient(_: SignalClient, didUpdateToken token: String) async {
         // update token
         _state.mutate { $0.token = token }
+    }
+
+    func signalClient(_: SignalClient, didSubscribeTrack trackSid: Track.Sid) async {
+        // Find the local track publication.
+        guard let track = localParticipant.trackPublications[trackSid] as? LocalTrackPublication else {
+            log("Could not find local track publication for subscribed event")
+            return
+        }
+
+        // Notify Room.
+        delegates.notify {
+            $0.room?(self, participant: self.localParticipant, remoteDidSubscribeTrack: track)
+        }
+
+        // Notify LocalParticipant.
+        localParticipant.delegates.notify {
+            $0.participant?(self.localParticipant, remoteDidSubscribeTrack: track)
+        }
     }
 }

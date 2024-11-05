@@ -120,6 +120,8 @@ extension Room {
 
             if connectResponse.clientConfiguration.forceRelay == .enabled {
                 rtcConfiguration.iceTransportPolicy = .relay
+            } else {
+                rtcConfiguration.iceTransportPolicy = connectOptions.iceTransportPolicy.toRTCType()
             }
 
             return rtcConfiguration
@@ -182,13 +184,9 @@ extension Room {
 
         } else if case .reconnect = connectResponse {
             log("[Connect] Configuring transports with RECONNECT response...")
-            guard let subscriber = _state.subscriber, let publisher = _state.publisher else {
-                log("[Connect] Subscriber or Publisher is nil", .error)
-                return
-            }
-
-            try await subscriber.set(configuration: rtcConfiguration)
-            try await publisher.set(configuration: rtcConfiguration)
+            let (subscriber, publisher) = _state.read { ($0.subscriber, $0.publisher) }
+            try await subscriber?.set(configuration: rtcConfiguration)
+            try await publisher?.set(configuration: rtcConfiguration)
         }
     }
 }
@@ -223,7 +221,7 @@ extension Room {
 
 // MARK: - Connection / Reconnection logic
 
-public enum StartReconnectReason {
+public enum StartReconnectReason: Sendable {
     case websocket
     case transport
     case networkSwitch
@@ -295,6 +293,7 @@ extension Room {
                                                                  token,
                                                                  connectOptions: _state.connectOptions,
                                                                  reconnectMode: _state.isReconnectingWithMode,
+                                                                 participantSid: localParticipant.sid,
                                                                  adaptiveStream: _state.roomOptions.adaptiveStream)
             try Task.checkCancellation()
 

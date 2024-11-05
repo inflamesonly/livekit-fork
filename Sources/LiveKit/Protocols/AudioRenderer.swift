@@ -25,34 +25,21 @@ internal import LiveKitWebRTC
 
 @objc
 public protocol AudioRenderer {
-    /// CMSampleBuffer for this track.
-    @objc optional
-    func render(sampleBuffer: CMSampleBuffer)
-
-    @objc optional
+    @objc
     func render(pcmBuffer: AVAudioPCMBuffer)
 }
 
-class AudioRendererAdapter: NSObject, LKRTCAudioRenderer {
-    private weak var target: AudioRenderer?
+class AudioRendererAdapter: MulticastDelegate<AudioRenderer>, LKRTCAudioRenderer {
+    //
+    typealias Delegate = AudioRenderer
 
-    init(target: AudioRenderer) {
-        self.target = target
+    init() {
+        super.init(label: "AudioRendererAdapter")
     }
 
-    func render(sampleBuffer: CMSampleBuffer) {
-        target?.render?(sampleBuffer: sampleBuffer)
-    }
+    // MARK: - LKRTCAudioRenderer
 
-    // Proxy the equality operators
-
-    override func isEqual(_ object: Any?) -> Bool {
-        guard let other = object as? AudioRendererAdapter else { return false }
-        return target === other.target
-    }
-
-    override var hash: Int {
-        guard let target else { return 0 }
-        return ObjectIdentifier(target).hashValue
+    func render(pcmBuffer: AVAudioPCMBuffer) {
+        notify { $0.render(pcmBuffer: pcmBuffer) }
     }
 }

@@ -38,7 +38,7 @@ class SampleBufferVideoRenderer: NativeView, Loggable {
         // this is required for macOS
         wantsLayer = true
         layer?.insertSublayer(sampleBufferDisplayLayer, at: 0)
-        #elseif os(iOS) || os(visionOS)
+        #elseif os(iOS) || os(visionOS) || os(tvOS)
         layer.insertSublayer(sampleBufferDisplayLayer, at: 0)
         #else
         fatalError("Unimplemented")
@@ -52,10 +52,10 @@ class SampleBufferVideoRenderer: NativeView, Loggable {
 
     override func performLayout() {
         super.performLayout()
-        sampleBufferDisplayLayer.frame = bounds
 
         let (rotation, isMirrored) = _state.read { ($0.videoRotation, $0.isMirrored) }
         sampleBufferDisplayLayer.transform = CATransform3D.from(rotation: rotation, isMirrored: isMirrored)
+        sampleBufferDisplayLayer.frame = bounds
 
         sampleBufferDisplayLayer.removeAllAnimations()
     }

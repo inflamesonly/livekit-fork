@@ -55,8 +55,6 @@ public class LocalAudioTrack: Track, LocalTrack, AudioTrack {
             "googNoiseSuppression": options.noiseSuppression.toString(),
             "googTypingNoiseDetection": options.typingNoiseDetection.toString(),
             "googHighpassFilter": options.highpassFilter.toString(),
-            "googNoiseSuppression2": options.experimentalNoiseSuppression.toString(),
-            "googAutoGainControl2": options.experimentalAutoGainControl.toString(),
         ]
 
         let audioConstraints = DispatchQueue.liveKitWebRTC.sync { LKRTCMediaConstraints(mandatoryConstraints: nil,
@@ -73,24 +71,6 @@ public class LocalAudioTrack: Track, LocalTrack, AudioTrack {
                                captureOptions: options)
     }
 
-    @discardableResult
-    override func onPublish() async throws -> Bool {
-        let didPublish = try await super.onPublish()
-        if didPublish {
-            AudioManager.shared.trackDidStart(.local)
-        }
-        return didPublish
-    }
-
-    @discardableResult
-    override func onUnpublish() async throws -> Bool {
-        let didUnpublish = try await super.onUnpublish()
-        if didUnpublish {
-            AudioManager.shared.trackDidStop(.local)
-        }
-        return didUnpublish
-    }
-
     public func mute() async throws {
         try await super._mute()
     }
@@ -98,9 +78,29 @@ public class LocalAudioTrack: Track, LocalTrack, AudioTrack {
     public func unmute() async throws {
         try await super._unmute()
     }
+
+    // MARK: - Internal
+
+    override func startCapture() async throws {
+        try await AudioManager.shared.trackDidStart(.local)
+    }
+
+    override func stopCapture() async throws {
+        try await AudioManager.shared.trackDidStop(.local)
+    }
 }
 
 public extension LocalAudioTrack {
     var publishOptions: TrackPublishOptions? { super._state.lastPublishOptions }
     var publishState: Track.PublishState { super._state.publishState }
+}
+
+public extension LocalAudioTrack {
+    func add(audioRenderer: AudioRenderer) {
+        AudioManager.shared.add(localAudioRenderer: audioRenderer)
+    }
+
+    func remove(audioRenderer: AudioRenderer) {
+        AudioManager.shared.remove(localAudioRenderer: audioRenderer)
+    }
 }
