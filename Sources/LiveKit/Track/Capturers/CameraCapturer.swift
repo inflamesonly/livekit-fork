@@ -160,15 +160,15 @@ public class CameraCapturer: VideoCapturer, @unchecked Sendable {
         if device == nil {
             #if os(iOS) || os(tvOS)
             var devices: [AVCaptureDevice]
-            if AVCaptureMultiCamSession.isMultiCamSupported {
-                // Get the list of devices already on the shared multi-cam session.
-                let existingDevices = captureSession.inputs.compactMap { $0 as? AVCaptureDeviceInput }.map(\.device)
-                log("Existing devices: \(existingDevices)")
-                // Compute other multi-cam compatible devices.
-                devices = try await DeviceManager.shared.multiCamCompatibleDevices(for: Set(existingDevices))
-            } else {
+//            if AVCaptureMultiCamSession.isMultiCamSupported {
+//                // Get the list of devices already on the shared multi-cam session.
+//                let existingDevices = captureSession.inputs.compactMap { $0 as? AVCaptureDeviceInput }.map(\.device)
+//                log("Existing devices: \(existingDevices)")
+//                // Compute other multi-cam compatible devices.
+//                devices = try await DeviceManager.shared.multiCamCompatibleDevices(for: Set(existingDevices))
+//            } else {
                 devices = try await CameraCapturer.captureDevices()
-            }
+//            }
             #else
             var devices = try await CameraCapturer.captureDevices()
             #endif
