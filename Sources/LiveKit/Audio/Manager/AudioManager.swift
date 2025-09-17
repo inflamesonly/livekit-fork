@@ -18,17 +18,13 @@ import Accelerate
 import AVFoundation
 import Combine
 
-#if swift(>=5.9)
 internal import LiveKitWebRTC
-#else
-@_implementationOnly import LiveKitWebRTC
-#endif
 
 // Audio Session Configuration related
 public class AudioManager: Loggable {
     // MARK: - Public
 
-    #if compiler(>=6.0)
+    #if swift(>=6.0)
     public nonisolated(unsafe) static let shared = AudioManager()
     #else
     public static let shared = AudioManager()
@@ -58,7 +54,7 @@ public class AudioManager: Loggable {
     ///   - ``isSpeakerOutputPreferred``
     ///
     /// If you want to revert to default behavior, set this to `nil`.
-    @available(*, deprecated, message: "Use `set(engineObservers:)` instead. See `DefaultAudioSessionObserver` for example.")
+    @available(*, deprecated, message: "Use `set(engineObservers:)` instead. See `AudioSessionEngineObserver` for example.")
     public var customConfigureAudioSessionFunc: ConfigureAudioSessionFunc? {
         get { _state.customConfigureFunc }
         set { _state.mutate { $0.customConfigureFunc = newValue } }
@@ -72,8 +68,8 @@ public class AudioManager: Loggable {
     ///
     /// This property is ignored if ``customConfigureAudioSessionFunc`` is set.
     public var isSpeakerOutputPreferred: Bool {
-        get { _state.isSpeakerOutputPreferred }
-        set { _state.mutate { $0.isSpeakerOutputPreferred = newValue } }
+        get { audioSession.isSpeakerOutputPreferred }
+        set { audioSession.isSpeakerOutputPreferred = newValue }
     }
 
     /// Specifies a fixed configuration for the audio session, overriding dynamic adjustments.
@@ -105,16 +101,15 @@ public class AudioManager: Loggable {
         // Keep this var within State so it's protected by UnfairLock
         public var localTracksCount: Int = 0
         public var remoteTracksCount: Int = 0
-        public var isSpeakerOutputPreferred: Bool = true
         public var customConfigureFunc: ConfigureAudioSessionFunc?
         public var sessionConfiguration: AudioSessionConfiguration?
 
         public var trackState: TrackState {
             switch (localTracksCount > 0, remoteTracksCount > 0) {
-            case (true, false): return .localOnly
-            case (false, true): return .remoteOnly
-            case (true, true): return .localAndRemote
-            default: return .none
+            case (true, false): .localOnly
+            case (false, true): .remoteOnly
+            case (true, true): .localAndRemote
+            default: .none
             }
         }
         #endif
@@ -123,13 +118,13 @@ public class AudioManager: Loggable {
     // MARK: - AudioProcessingModule
 
     private lazy var capturePostProcessingDelegateAdapter: AudioCustomProcessingDelegateAdapter = {
-        let adapter = AudioCustomProcessingDelegateAdapter()
+        let adapter = AudioCustomProcessingDelegateAdapter(label: "capturePost")
         RTC.audioProcessingModule.capturePostProcessingDelegate = adapter
         return adapter
     }()
 
     private lazy var renderPreProcessingDelegateAdapter: AudioCustomProcessingDelegateAdapter = {
-        let adapter = AudioCustomProcessingDelegateAdapter()
+        let adapter = AudioCustomProcessingDelegateAdapter(label: "renderPre")
         RTC.audioProcessingModule.renderPreProcessingDelegate = adapter
         return adapter
     }()
@@ -293,7 +288,7 @@ public class AudioManager: Loggable {
     /// Keep recording initialized (mic input) and pre-warm voice processing etc.
     /// Mic permission is required and dialog will appear if not already granted.
     /// This will per persisted accross Rooms and connections.
-    public func setRecordingAlwaysPreparedMode(_ enabled: Bool) throws {
+    public func setRecordingAlwaysPreparedMode(_ enabled: Bool) async throws {
         let result = RTC.audioDeviceModule.setRecordingAlwaysPreparedMode(enabled)
         try checkAdmResult(code: result)
     }
@@ -315,7 +310,7 @@ public class AudioManager: Loggable {
     }
 
     /// Set a chain of ``AudioEngineObserver``s.
-    /// Defaults to having a single ``DefaultAudioSessionObserver`` initially.
+    /// Defaults to having a single ``AudioSessionEngineObserver`` initially.
     ///
     /// The first object will be invoked and is responsible for calling the next object.
     /// See ``NextInvokable`` protocol for details.
@@ -324,8 +319,6 @@ public class AudioManager: Loggable {
     public func set(engineObservers: [any AudioEngineObserver]) {
         _state.mutate { $0.engineObservers = engineObservers }
     }
-
-    public let mixer = DefaultMixerAudioObserver()
 
     public var isEngineRunning: Bool {
         RTC.audioDeviceModule.isEngineRunning
@@ -343,6 +336,17 @@ public class AudioManager: Loggable {
         }
     }
 
+    // MARK: - Default AudioEngineObservers
+
+    public let mixer = MixerEngineObserver()
+
+    #if os(iOS) || os(visionOS) || os(tvOS)
+    /// Configures the `AVAudioSession` based on the audio engine's state.
+    /// Set `AudioManager.shared.audioSession.isAutomaticConfigurationEnabled` to `false` to manually configure the `AVAudioSession` instead.
+    /// > Note: It is recommended to set this before connecting to a room.
+    public let audioSession = AudioSessionEngineObserver()
+    #endif
+
     // MARK: - Internal
 
     let _state: StateSync<State>
@@ -351,7 +355,7 @@ public class AudioManager: Loggable {
 
     init() {
         #if os(iOS) || os(visionOS) || os(tvOS)
-        let engineObservers: [any AudioEngineObserver] = [DefaultAudioSessionObserver(), mixer]
+        let engineObservers: [any AudioEngineObserver] = [audioSession, mixer]
         #else
         let engineObservers: [any AudioEngineObserver] = [mixer]
         #endif
@@ -401,10 +405,20 @@ extension AudioManager {
     }
 }
 
+// SDK side AudioEngine error codes
+let kAudioEngineErrorFailedToConfigureAudioSession = -4100
+let kAudioEngineErrorAudioSessionCategoryRecordingRequired = -4102
+
+let kAudioEngineErrorInsufficientDevicePermission = -4101
+
 extension AudioManager {
     func checkAdmResult(code: Int) throws {
-        if code == kFailedToConfigureAudioSessionErrorCode {
+        if code == kAudioEngineErrorFailedToConfigureAudioSession {
             throw LiveKitError(.audioSession, message: "Failed to configure audio session")
+        } else if code == kAudioEngineErrorInsufficientDevicePermission {
+            throw LiveKitError(.deviceAccessDenied, message: "Device permissions are not granted")
+        } else if code == kAudioEngineErrorAudioSessionCategoryRecordingRequired {
+            throw LiveKitError(.audioSession, message: "Recording category required for audio session")
         } else if code != 0 {
             throw LiveKitError(.audioEngine, message: "Audio engine returned error code: \(code)")
         }

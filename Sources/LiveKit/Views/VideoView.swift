@@ -17,11 +17,7 @@
 @preconcurrency import AVFoundation
 import MetalKit
 
-#if swift(>=5.9)
 internal import LiveKitWebRTC
-#else
-@_implementationOnly import LiveKitWebRTC
-#endif
 
 /// A ``NativeViewType`` that conforms to ``RTCVideoRenderer``.
 typealias NativeRendererView = LKRTCVideoRenderer & Mirrorable & NativeViewType
@@ -218,8 +214,8 @@ public class VideoView: NativeView, Loggable {
         var pinchToZoomOptions: PinchToZoomOptions = []
 
         // Only used for rendering local tracks
-        var captureOptions: VideoCaptureOptions? = nil
-        var captureDevice: AVCaptureDevice? = nil
+        var captureOptions: VideoCaptureOptions?
+        var captureDevice: AVCaptureDevice?
 
         // whether if current state should be rendering
         var shouldRender: Bool {
@@ -231,7 +227,7 @@ public class VideoView: NativeView, Loggable {
 
     // MARK: - Private
 
-    #if compiler(>=6.0)
+    #if swift(>=6.0)
     private nonisolated(unsafe) var _primaryRenderer: NativeRendererView?
     private nonisolated(unsafe) var _secondaryRenderer: NativeRendererView?
     #else
@@ -271,22 +267,27 @@ public class VideoView: NativeView, Loggable {
         _state.onDidMutate = { [weak self] newState, oldState in
             guard let self else { return }
 
-            self.log("Mutating in main thread: \(Thread.current.isMainThread)", .trace)
+            log("Mutating in main thread: \(Thread.current.isMainThread)", .trace)
 
             let shouldRenderDidUpdate = newState.shouldRender != oldState.shouldRender
             let renderModeDidUpdate = newState.renderMode != oldState.renderMode
             let trackDidUpdate = !Self.track(oldState.track as? VideoTrack, isEqualWith: newState.track as? VideoTrack)
 
+            // Always add/remove from the track asynchronously - even when called on @MainActor
             if trackDidUpdate || shouldRenderDidUpdate {
-                // Handle track removal outside of main queue
-                if let track = oldState.track as? VideoTrack {
-                    track.remove(videoRenderer: self)
+                Task {
+                    if let track = oldState.track as? VideoTrack {
+                        track.remove(videoRenderer: self)
+                    }
+                    if let track = newState.track as? VideoTrack, newState.shouldRender {
+                        track.add(videoRenderer: self)
+                    }
                 }
             }
 
-            // Enter .main only if UI updates are required
+            // Recreate renderers if necessary on @MainActor
             if trackDidUpdate || shouldRenderDidUpdate || renderModeDidUpdate {
-                self.mainSyncOrAsync { @MainActor in
+                Task { @MainActor in
                     var didReCreateNativeRenderer = false
 
                     if trackDidUpdate || shouldRenderDidUpdate {
@@ -320,24 +321,17 @@ public class VideoView: NativeView, Loggable {
                 }
             }
 
-            // Handle track addition outside of main queue
-            if trackDidUpdate || shouldRenderDidUpdate {
-                if let track = newState.track as? VideoTrack, newState.shouldRender {
-                    track.add(videoRenderer: self)
-                }
-            }
-
             // isRendering updated
             if newState.isRendering != oldState.isRendering {
-                self.log("isRendering \(oldState.isRendering) -> \(newState.isRendering)")
-                self.delegates.notify(label: { "videoView.didUpdate isRendering: \(newState.isRendering)" }) {
+                log("isRendering \(oldState.isRendering) -> \(newState.isRendering)")
+                delegates.notify(label: { "videoView.didUpdate isRendering: \(newState.isRendering)" }) {
                     $0.videoView?(self, didUpdate: newState.isRendering)
                 }
             }
 
             // viewSize updated
             if newState.viewSize != oldState.viewSize {
-                self.delegates.notify {
+                delegates.notify {
                     $0.videoView?(self, didUpdate: newState.viewSize)
                 }
             }
@@ -375,9 +369,9 @@ public class VideoView: NativeView, Loggable {
             if newState.isDebugMode != oldState.isDebugMode {
                 // fps timer
                 if newState.isDebugMode {
-                    self._fpsTimer.restart()
+                    _fpsTimer.restart()
                 } else {
-                    self._fpsTimer.cancel()
+                    _fpsTimer.cancel()
                 }
             }
         }
@@ -385,19 +379,19 @@ public class VideoView: NativeView, Loggable {
         _fpsTimer.setTimerBlock { @MainActor [weak self] in
             guard let self else { return }
 
-            self._currentFPS = self._frameCount
-            self._frameCount = 0
+            _currentFPS = _frameCount
+            _frameCount = 0
 
-            self.setNeedsLayout()
+            setNeedsLayout()
         }
 
         _renderTimer.setTimerBlock { [weak self] in
             guard let self else { return }
 
-            if self._state.isRendering, let renderDate = self._state.renderDate {
+            if _state.isRendering, let renderDate = _state.renderDate {
                 let diff = Date().timeIntervalSince(renderDate)
                 if await diff >= Self._freezeDetectThreshold {
-                    self._state.mutate { $0.isRendering = false }
+                    _state.mutate { $0.isRendering = false }
                 }
             }
         }
@@ -443,7 +437,7 @@ public class VideoView: NativeView, Loggable {
             let _didRenderFirstFrame = state.didRenderFirstFrame ? "true" : "false"
             let _isRendering = state.isRendering ? "true" : "false"
             let _renderMode = String(describing: state.renderMode)
-            let _viewCount = state.track?._state.videoRenderers.allObjects.count ?? 0
+            let _viewCount = state.track?._state.videoRendererAdapters.count ?? 0
             let debugView = ensureDebugTextView()
             debugView.text = "#\(hashValue)\n" + "\(String(describing: _trackSid))\n" + "\(_dimensions.width)x\(_dimensions.height)\n" + "isEnabled: \(isEnabled)\n" + "firstFrame: \(_didRenderFirstFrame)\n" + "isRendering: \(_isRendering)\n" + "renderMode: \(_renderMode)\n" + "viewCount: \(_viewCount)\n" + "FPS: \(_currentFPS)\n"
             debugView.frame = bounds
@@ -580,9 +574,9 @@ private extension VideoView {
 
     func _shouldMirror() -> Bool {
         switch _state.mirrorMode {
-        case .auto: return _state.captureDevice?.facingPosition == .front
-        case .off: return false
-        case .mirror: return true
+        case .auto: _state.captureDevice?.facingPosition == .front
+        case .off: false
+        case .mirror: true
         }
     }
 }
@@ -600,7 +594,7 @@ extension VideoView: VideoRenderer {
 
     public func set(size: CGSize) {
         DispatchQueue.main.async { [weak self] in
-            guard let self, let nr = self._primaryRenderer else { return }
+            guard let self, let nr = _primaryRenderer else { return }
             nr.setSize(size)
         }
     }
@@ -861,30 +855,6 @@ extension LKRTCMTLVideoView: Mirrorable {
     }
 }
 #endif
-
-private extension VideoView {
-    #if compiler(>=5.9)
-    nonisolated func mainSyncOrAsync(operation: @MainActor @escaping () -> Void) {
-        if Thread.current.isMainThread {
-            MainActor.assumeIsolated(operation)
-        } else {
-            Task { @MainActor in
-                operation()
-            }
-        }
-    }
-    #else
-    nonisolated func mainSyncOrAsync(operation: @escaping () -> Void) {
-        if Thread.current.isMainThread {
-            operation()
-        } else {
-            Task { @MainActor in
-                operation()
-            }
-        }
-    }
-    #endif
-}
 
 #if os(iOS)
 extension VideoView.TransitionMode {

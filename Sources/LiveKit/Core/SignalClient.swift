@@ -16,41 +16,37 @@
 
 import Foundation
 
-#if swift(>=5.9)
 internal import LiveKitWebRTC
-#else
-@_implementationOnly import LiveKitWebRTC
-#endif
 
 actor SignalClient: Loggable {
     // MARK: - Types
 
     typealias AddTrackRequestPopulator = @Sendable (inout Livekit_AddTrackRequest) throws -> Void
 
-    public enum ConnectResponse: Sendable {
+    enum ConnectResponse: Sendable {
         case join(Livekit_JoinResponse)
         case reconnect(Livekit_ReconnectResponse)
 
-        public var rtcIceServers: [LKRTCIceServer] {
+        var rtcIceServers: [LKRTCIceServer] {
             switch self {
-            case let .join(response): return response.iceServers.map { $0.toRTCType() }
-            case let .reconnect(response): return response.iceServers.map { $0.toRTCType() }
+            case let .join(response): response.iceServers.map { $0.toRTCType() }
+            case let .reconnect(response): response.iceServers.map { $0.toRTCType() }
             }
         }
 
-        public var clientConfiguration: Livekit_ClientConfiguration {
+        var clientConfiguration: Livekit_ClientConfiguration {
             switch self {
-            case let .join(response): return response.clientConfiguration
-            case let .reconnect(response): return response.clientConfiguration
+            case let .join(response): response.clientConfiguration
+            case let .reconnect(response): response.clientConfiguration
             }
         }
     }
 
     // MARK: - Public
 
-    public var connectionState: ConnectionState { _state.connectionState }
+    var connectionState: ConnectionState { _state.connectionState }
 
-    public var disconnectError: LiveKitError? { _state.disconnectError }
+    var disconnectError: LiveKitError? { _state.disconnectError }
 
     // MARK: - Private
 
@@ -64,22 +60,22 @@ actor SignalClient: Loggable {
         do {
             // Prepare request data...
             guard let data = try? request.serializedData() else {
-                self.log("Could not serialize request data", .error)
+                log("Could not serialize request data", .error)
                 throw LiveKitError(.failedToConvertData, message: "Failed to convert data")
             }
 
-            let webSocket = try await self.requireWebSocket()
+            let webSocket = try await requireWebSocket()
             try await webSocket.send(data: data)
 
         } catch {
-            self.log("Failed to send queued request \(request) with error: \(error)", .warning)
+            log("Failed to send queued request \(request) with error: \(error)", .warning)
         }
     })
 
     private lazy var _responseQueue = QueueActor<Livekit_SignalResponse>(onProcess: { [weak self] response in
         guard let self else { return }
 
-        await self._process(signalResponse: response)
+        await _process(signalResponse: response)
     })
 
     private let _connectResponseCompleter = AsyncCompleter<ConnectResponse>(label: "Join response", defaultTimeout: .defaultJoinResponse)
@@ -104,8 +100,8 @@ actor SignalClient: Loggable {
             guard let self else { return }
             // ConnectionState
             if oldState.connectionState != newState.connectionState {
-                self.log("\(oldState.connectionState) -> \(newState.connectionState)")
-                self._delegate.notifyDetached { await $0.signalClient(self, didUpdateConnectionState: newState.connectionState, oldState: oldState.connectionState, disconnectError: self.disconnectError) }
+                log("\(oldState.connectionState) -> \(newState.connectionState)")
+                _delegate.notifyDetached { await $0.signalClient(self, didUpdateConnectionState: newState.connectionState, oldState: oldState.connectionState, disconnectError: self.disconnectError) }
             }
         }
     }
@@ -129,7 +125,6 @@ actor SignalClient: Loggable {
         }
 
         let url = try Utils.buildUrl(url,
-                                     token,
                                      connectOptions: connectOptions,
                                      reconnectMode: reconnectMode,
                                      participantSid: participantSid,
@@ -144,7 +139,9 @@ actor SignalClient: Loggable {
         _state.mutate { $0.connectionState = (reconnectMode != nil ? .reconnecting : .connecting) }
 
         do {
-            let socket = try await WebSocket(url: url, connectOptions: connectOptions)
+            let socket = try await WebSocket(url: url,
+                                             token: token,
+                                             connectOptions: connectOptions)
 
             let task = Task.detached {
                 self.log("Did enter WebSocket message loop...")
@@ -186,14 +183,13 @@ actor SignalClient: Loggable {
 
             // Validate...
             let validateUrl = try Utils.buildUrl(url,
-                                                 token,
                                                  connectOptions: connectOptions,
                                                  participantSid: participantSid,
                                                  adaptiveStream: adaptiveStream,
                                                  validate: true)
 
             log("Validating with url: \(validateUrl)...")
-            let validationResponse = try await HTTP.requestString(from: validateUrl)
+            let validationResponse = try await HTTP.requestValidation(from: validateUrl, token: token)
             log("Validate response: \(validationResponse)")
             // re-throw with validation response
             throw LiveKitError(.network, message: "Validation response: \"\(validationResponse)\"")
@@ -242,13 +238,11 @@ private extension SignalClient {
     }
 
     func _onWebSocketMessage(message: URLSessionWebSocketTask.Message) async {
-        let response: Livekit_SignalResponse? = {
-            switch message {
-            case let .data(data): return try? Livekit_SignalResponse(serializedData: data)
-            case let .string(string): return try? Livekit_SignalResponse(jsonString: string)
-            default: return nil
-            }
-        }()
+        let response: Livekit_SignalResponse? = switch message {
+        case let .data(data): try? Livekit_SignalResponse(serializedBytes: data)
+        case let .string(string): try? Livekit_SignalResponse(jsonString: string)
+        default: nil
+        }
 
         guard let response else {
             log("Failed to decode SignalResponse", .warning)
@@ -256,12 +250,10 @@ private extension SignalClient {
         }
 
         Task.detached {
-            let alwaysProcess: Bool = {
-                switch response.message {
-                case .join, .reconnect, .leave: return true
-                default: return false
-                }
-            }()
+            let alwaysProcess = switch response.message {
+            case .join, .reconnect, .leave: true
+            default: false
+            }
             // Always process join or reconnect messages even if suspended...
             await self._responseQueue.processIfResumed(response, or: alwaysProcess)
         }
@@ -357,6 +349,9 @@ private extension SignalClient {
 
         case let .trackSubscribed(trackSubscribed):
             _delegate.notifyDetached { await $0.signalClient(self, didSubscribeTrack: Track.Sid(from: trackSubscribed.trackSid)) }
+
+        case .roomMoved:
+            log("Received roomMoved message")
         }
     }
 }
@@ -533,7 +528,8 @@ extension SignalClient {
                        offer: Livekit_SessionDescription?,
                        subscription: Livekit_UpdateSubscription,
                        publishTracks: [Livekit_TrackPublishedResponse]? = nil,
-                       dataChannels: [Livekit_DataChannelInfo]? = nil) async throws
+                       dataChannels: [Livekit_DataChannelInfo]? = nil,
+                       dataChannelReceiveStates: [Livekit_DataChannelReceiveState]? = nil) async throws
     {
         let r = Livekit_SignalRequest.with {
             $0.syncState = Livekit_SyncState.with {
@@ -546,6 +542,7 @@ extension SignalClient {
                 $0.subscription = subscription
                 $0.publishTracks = publishTracks ?? []
                 $0.dataChannels = dataChannels ?? []
+                $0.datachannelReceiveStates = dataChannelReceiveStates ?? []
             }
         }
 
@@ -632,8 +629,8 @@ private extension SignalClient {
         _pingTimeoutTimer.setTimerInterval(TimeInterval(jr.pingTimeout))
         _pingTimeoutTimer.setTimerBlock { [weak self] in
             guard let self else { return }
-            self.log("ping/pong timed out", .error)
-            await self.cleanUp(withError: LiveKitError(.serverPingTimedOut))
+            log("ping/pong timed out", .error)
+            await cleanUp(withError: LiveKitError(.serverPingTimedOut))
         }
 
         _pingTimeoutTimer.restart()
@@ -671,7 +668,7 @@ private extension SignalClient {
         _pingIntervalTimer.setTimerInterval(TimeInterval(jr.pingInterval))
         _pingIntervalTimer.setTimerBlock { [weak self] in
             guard let self else { return }
-            try await self._onPingIntervalTimer()
+            try await _onPingIntervalTimer()
         }
         _pingIntervalTimer.restart()
     }
@@ -680,8 +677,8 @@ private extension SignalClient {
 extension Livekit_SignalRequest {
     func canBeQueued() -> Bool {
         switch message {
-        case .syncState, .trickle, .offer, .answer, .simulate, .leave: return false
-        default: return true
+        case .syncState, .trickle, .offer, .answer, .simulate, .leave: false
+        default: true
         }
     }
 }

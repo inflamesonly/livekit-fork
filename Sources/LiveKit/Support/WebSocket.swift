@@ -15,6 +15,7 @@
  */
 
 import Foundation
+import Network
 
 typealias WebSocketStream = AsyncThrowingStream<URLSessionWebSocketTask.Message, Error>
 
@@ -32,6 +33,11 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
     private let request: URLRequest
 
     private lazy var urlSession: URLSession = {
+        #if targetEnvironment(simulator)
+        if #available(iOS 26.0, *) {
+            nw_tls_create_options()
+        }
+        #endif
         let config = URLSessionConfiguration.default
         // explicitly set timeout intervals
         config.timeoutIntervalForRequest = TimeInterval(60)
@@ -54,11 +60,17 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
         waitForNextValue()
     }
 
-    init(url: URL, connectOptions: ConnectOptions?) async throws {
-        request = URLRequest(url: url,
-                             cachePolicy: .useProtocolCachePolicy,
-                             timeoutInterval: connectOptions?.socketConnectTimeoutInterval ?? .defaultSocketConnect)
+    init(url: URL, token: String, connectOptions: ConnectOptions?) async throws {
+        // Prepare the request
+        var request = URLRequest(url: url,
+                                 cachePolicy: .useProtocolCachePolicy,
+                                 timeoutInterval: connectOptions?.socketConnectTimeoutInterval ?? .defaultSocketConnect)
+        // Attach token to header
+        request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        self.request = request
+
         super.init()
+
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 _state.mutate { state in
@@ -78,6 +90,7 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
 
     func close() {
         task.cancel(with: .normalClosure, reason: nil)
+        urlSession.finishTasksAndInvalidate()
 
         _state.mutate { state in
             state.connectContinuation?.resume(throwing: LiveKitError(.cancelled))
@@ -103,16 +116,16 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
         }
 
         task.receive(completionHandler: { [weak self] result in
-            guard let self, let continuation = self._state.streamContinuation else {
+            guard let self, let continuation = _state.streamContinuation else {
                 return
             }
 
             do {
                 let message = try result.get()
                 continuation.yield(message)
-                self.waitForNextValue()
+                waitForNextValue()
             } catch {
-                self._state.mutate { state in
+                _state.mutate { state in
                     state.streamContinuation?.finish(throwing: LiveKitError.from(error: error))
                     state.streamContinuation = nil
                 }
@@ -122,7 +135,7 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
 
     // MARK: - Send
 
-    public func send(data: Data) async throws {
+    func send(data: Data) async throws {
         let message = URLSessionWebSocketTask.Message.data(data)
         try await task.send(message)
     }

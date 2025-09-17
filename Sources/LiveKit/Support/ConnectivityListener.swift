@@ -31,15 +31,15 @@ extension ConnectivityListenerDelegate {
 class ConnectivityListener: MulticastDelegate<ConnectivityListenerDelegate>, @unchecked Sendable {
     static let shared = ConnectivityListener()
 
-    public private(set) var hasConnectivity: Bool? {
+    private(set) var hasConnectivity: Bool? {
         didSet {
             guard let newValue = hasConnectivity, oldValue != newValue else { return }
             notify { $0.connectivityListener(self, didUpdate: newValue) }
         }
     }
 
-    public private(set) var ipv4: String?
-    public private(set) var path: NWPath?
+    private(set) var ipv4: String?
+    private(set) var path: NWPath?
 
     private let queue = DispatchQueue(label: "LiveKitSDK.connectivityListener", qos: .default)
 
@@ -60,7 +60,7 @@ class ConnectivityListener: MulticastDelegate<ConnectivityListenerDelegate>, @un
 
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
-            self.set(path: path)
+            set(path: path)
         }
 
         monitor.start(queue: queue)
@@ -111,9 +111,9 @@ private extension ConnectivityListener {
                                                       repeats: false)
             { [weak self] _ in
                 guard let self else { return }
-                self.log("satisfied monitor timer invalidated")
-                self.isPossiblySwitchingNetwork = false
-                self.switchNetworkTimer = nil
+                log("satisfied monitor timer invalidated")
+                isPossiblySwitchingNetwork = false
+                switchNetworkTimer = nil
             }
         } else if !oldValue.isSatisfied(), newValue.isSatisfied(), isPossiblySwitchingNetwork {
             // unsatisfied -> satisfied
@@ -168,7 +168,7 @@ extension NWInterface {
                     getnameinfo(interface.ifa_addr, socklen_t(interface.ifa_addr.pointee.sa_len),
                                 &hostname, socklen_t(hostname.count),
                                 nil, socklen_t(0), NI_NUMERICHOST)
-                    address = String(cString: hostname)
+                    address = String(cString: hostname, encoding: .utf8)
                 }
             }
         }

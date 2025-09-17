@@ -1,5 +1,61 @@
 # Changelog
 
+## [2.7.2] - 2025-08-29
+
+### Fixed
+
+- Fixed transceiver crash, reverting video memory leak changes
+
+## [2.7.1] - 2025-08-25
+
+### Added
+
+- Recording permission check at SDK level
+
+### Changed
+
+- Expose audio capture API
+
+### Fixed
+
+- Remote audio buffer when using manual rendering mode
+
+## [2.7.0] - 2025-08-21
+
+### Added
+
+- outputVolume property to audio mixer
+- Added the possibility to exlude macOS windows from screen sharing
+- HEVC (H.265) codec support
+- Added wait until active APIs for RemoteParticipant
+
+### Changed
+
+- Improved reliability of the data channel
+- Drop Xcode 14 (Swift 5.7) support
+- Updated webrtc to m137
+
+### Fixed
+
+- Fixed concurrent registration for text/byte streams
+- macOS audio start workarounds
+- Fixed WebSocket memory leak after disconnecting
+- Fixed memory leak while unpublishing video tracks
+
+## [2.6.1] - 2025-06-17
+
+### Fixed
+
+- Fixed Xcode 26 build errors with Swift 6.2
+- Remove problematic KeyPath conformance to Sendable
+- Fix race condition during remote track deinit
+- Fix WebRTC symbol clash
+
+### Changed
+
+- Update audio session logic
+- Flag to disable automatic audio session configuration
+
 ## [2.6.0] - 2025-05-15
 
 ### Added

@@ -14,11 +14,7 @@
  * limitations under the License.
  */
 
-#if swift(>=5.9)
 internal import LiveKitWebRTC
-#else
-@_implementationOnly import LiveKitWebRTC
-#endif
 
 @objc
 public enum SubscriptionState: Int, Codable {
@@ -344,7 +340,7 @@ extension RemoteTrackPublication {
             return
         }
 
-        let videoRenderers = track?._state.videoRenderers.allObjects ?? []
+        let videoRenderers = track?._state.videoRendererAdapters.objectEnumerator()?.allObjects.compactMap { ($0 as? VideoRendererAdapter)?.renderer } ?? []
         let isEnabled = videoRenderers.containsOneOrMoreAdaptiveStreamEnabledRenderers()
         var dimensions: Dimensions = .zero
 

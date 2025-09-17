@@ -16,19 +16,14 @@
 
 import Foundation
 
-/// A property wrapper type that reflects a value from a bundle's info dictionary.
-@propertyWrapper
-struct BundleInfo<Value>: Sendable {
-    private let key: String
-    private let bundle: Bundle
+extension Encodable {
+    func mapped<T: Decodable>(to type: T.Type,
+                              encoder: JSONEncoder = JSONEncoder(),
+                              decoder: JSONDecoder = JSONDecoder()) -> T?
+    {
+        guard let encoded = try? encoder.encode(self),
+              let decoded = try? decoder.decode(type, from: encoded) else { return nil }
 
-    init(_ key: String, bundle: Bundle = .main) {
-        self.key = key
-        self.bundle = bundle
-    }
-
-    var wrappedValue: Value? {
-        guard let value = bundle.infoDictionary?[key] as? Value else { return nil }
-        return value
+        return decoded
     }
 }

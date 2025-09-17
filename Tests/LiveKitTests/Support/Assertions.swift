@@ -14,18 +14,21 @@
  * limitations under the License.
  */
 
-@testable import LiveKit
 import XCTest
 
-class VideoViewTests: LKTestCase {
-    /// Test if avSampleBufferDisplayLayer is available immediately after creating VideoView.
-    @MainActor
-    func testAVSampleBufferDisplayLayer() {
-        let track = LocalVideoTrack.createCameraTrack()
-        let view = VideoView()
-        view.renderMode = .sampleBuffer
-        view.track = track
-        // avSampleBufferDisplayLayer should not be nil at this point
-        XCTAssert(view.avSampleBufferDisplayLayer != nil)
+func XCTAssertThrowsErrorAsync(_ expression: @autoclosure () async throws -> some Any) async {
+    do {
+        _ = try await expression()
+        XCTFail("No error was thrown.")
+    } catch {
+        // Pass
+    }
+}
+
+extension LKTestCase {
+    func noLeaks(of instance: AnyObject & Sendable, file: StaticString = #filePath, line: UInt = #line) {
+        addTeardownBlock { [weak instance] in
+            XCTAssertNil(instance, "Leaked object: \(String(describing: instance))", file: file, line: line)
+        }
     }
 }

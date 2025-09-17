@@ -20,20 +20,20 @@
 class DeviceManager: @unchecked Sendable, Loggable {
     // MARK: - Public
 
-    public static let shared = DeviceManager()
+    static let shared = DeviceManager()
 
-    public static func prepare() {
+    static func prepare() {
         // Instantiate shared instance
         _ = shared
     }
 
     // Async version, waits until inital device fetch is complete
-    public func devices() async throws -> [AVCaptureDevice] {
+    func devices() async throws -> [AVCaptureDevice] {
         try await _devicesCompleter.wait()
     }
 
     // Sync version
-    public func devices() -> [AVCaptureDevice] {
+    func devices() -> [AVCaptureDevice] {
         _state.devices
     }
 
@@ -57,14 +57,12 @@ class DeviceManager: @unchecked Sendable, Loggable {
         #endif
 
         // Xcode 15.0 Swift 5.9
-        #if compiler(>=5.9)
         if #available(iOS 17.0, macOS 14.0, tvOS 17.0, *) {
             deviceTypes.append(contentsOf: [
                 .continuityCamera,
                 .external,
             ])
         }
-        #endif
 
         return AVCaptureDevice.DiscoverySession(deviceTypes: deviceTypes,
                                                 mediaType: .video,
@@ -105,14 +103,14 @@ class DeviceManager: @unchecked Sendable, Loggable {
         #if os(iOS) || os(macOS) || os(tvOS)
         DispatchQueue.global(qos: .background).async { [weak self] in
             guard let self else { return }
-            self._devicesObservation = self.discoverySession.observe(\.devices, options: [.initial, .new]) { [weak self] _, value in
+            _devicesObservation = discoverySession.observe(\.devices, options: [.initial, .new]) { [weak self] _, value in
                 guard let self else { return }
                 let devices = (value.newValue ?? []).sortedByFacingPositionPriority()
-                self.log("Devices: \(String(describing: devices))")
-                self._state.mutate { $0.devices = devices }
-                self._devicesCompleter.resume(returning: devices)
+                log("Devices: \(String(describing: devices))")
+                _state.mutate { $0.devices = devices }
+                _devicesCompleter.resume(returning: devices)
                 #if os(macOS)
-                self._multiCamDeviceSetsCompleter.resume(returning: [])
+                _multiCamDeviceSetsCompleter.resume(returning: [])
                 #endif
             }
         }
@@ -127,12 +125,12 @@ class DeviceManager: @unchecked Sendable, Loggable {
         #if os(iOS) || os(tvOS)
         DispatchQueue.global(qos: .background).async { [weak self] in
             guard let self else { return }
-            self._multiCamDeviceSetsObservation = self.discoverySession.observe(\.supportedMultiCamDeviceSets, options: [.initial, .new]) { [weak self] _, value in
+            _multiCamDeviceSetsObservation = discoverySession.observe(\.supportedMultiCamDeviceSets, options: [.initial, .new]) { [weak self] _, value in
                 guard let self else { return }
                 let deviceSets = (value.newValue ?? [])
-                self.log("MultiCam deviceSets: \(String(describing: deviceSets))")
-                self._state.mutate { $0.multiCamDeviceSets = deviceSets }
-                self._multiCamDeviceSetsCompleter.resume(returning: deviceSets)
+                log("MultiCam deviceSets: \(String(describing: deviceSets))")
+                _state.mutate { $0.multiCamDeviceSets = deviceSets }
+                _multiCamDeviceSetsCompleter.resume(returning: deviceSets)
             }
         }
         #endif

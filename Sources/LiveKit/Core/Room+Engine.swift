@@ -20,11 +20,7 @@ import Foundation
 import Network
 #endif
 
-#if swift(>=5.9)
 internal import LiveKitWebRTC
-#else
-@_implementationOnly import LiveKitWebRTC
-#endif
 
 // Room+Engine
 extension Room {
@@ -106,6 +102,9 @@ extension Room {
         if let identity = localParticipant.identity?.stringValue {
             packet.participantIdentity = identity
         }
+        if let sid = localParticipant.sid?.stringValue {
+            packet.participantSid = sid
+        }
 
         try await publisherDataChannel.send(dataPacket: packet)
     }
@@ -164,8 +163,8 @@ extension Room {
 
             await publisher.set { [weak self] offer in
                 guard let self else { return }
-                self.log("Publisher onOffer \(offer.sdp)")
-                try await self.signalClient.send(offer: offer)
+                log("Publisher onOffer \(offer.sdp)")
+                try await signalClient.send(offer: offer)
             }
 
             // data over pub channel for backwards compatibility
@@ -194,11 +193,12 @@ extension Room {
                 try await publisherShouldNegotiate()
             }
 
-        } else if case .reconnect = connectResponse {
+        } else if case let .reconnect(reconnectResponse) = connectResponse {
             log("[Connect] Configuring transports with RECONNECT response...")
             let (subscriber, publisher) = _state.read { ($0.subscriber, $0.publisher) }
             try await subscriber?.set(configuration: rtcConfiguration)
             try await publisher?.set(configuration: rtcConfiguration)
+            publisherDataChannel.retryReliable(lastSequence: reconnectResponse.lastMessageSeq)
         }
     }
 }
@@ -219,13 +219,13 @@ extension Room {
                 guard let self else { return }
 
                 // create an entry and enqueue block
-                self.log("[execution control] enqueuing entry...")
+                log("[execution control] enqueuing entry...")
 
                 let entry = ConditionalExecutionEntry(executeCondition: condition,
                                                       removeCondition: removeCondition,
                                                       block: block)
 
-                self._queuedBlocks.append(entry)
+                _queuedBlocks.append(entry)
             }
         }
     }
@@ -459,7 +459,8 @@ extension Room {
                                              offer: previousOffer?.toPBType(),
                                              subscription: subscription,
                                              publishTracks: localParticipant.publishedTracksInfo(),
-                                             dataChannels: publisherDataChannel.infos())
+                                             dataChannels: publisherDataChannel.infos(),
+                                             dataChannelReceiveStates: subscriberDataChannel.receiveStates())
     }
 }
 

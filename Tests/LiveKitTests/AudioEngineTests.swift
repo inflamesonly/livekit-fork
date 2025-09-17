@@ -17,6 +17,7 @@
 @preconcurrency import AVFoundation
 @testable import LiveKit
 import LiveKitWebRTC
+import LKObjCHelpers
 import XCTest
 
 class AudioEngineTests: LKTestCase, @unchecked Sendable {
@@ -67,7 +68,7 @@ class AudioEngineTests: LKTestCase, @unchecked Sendable {
         XCTAssert(!adm.isRecordingInitialized)
 
         // Ensure recording is initialized after set to true.
-        try adm.setRecordingAlwaysPreparedMode(true)
+        try await adm.setRecordingAlwaysPreparedMode(true)
 
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
@@ -311,6 +312,35 @@ class AudioEngineTests: LKTestCase, @unchecked Sendable {
             try await rooms[0].localParticipant.setMicrophone(enabled: true)
         })
     }
+
+    // Test if audio engine can start while another AVAudioEngine is running with VP enabled.
+    func testMultipleAudioEngine() async throws {
+        // Start sample audio engine with VP.
+        let engine = AVAudioEngine()
+        try engine.outputNode.setVoiceProcessingEnabled(true)
+
+        let outputFormat = engine.outputNode.inputFormat(forBus: 0)
+        let generator = SineWaveSourceNode(frequency: 480, sampleRate: outputFormat.sampleRate)
+        let monoFormat = AVAudioFormat(standardFormatWithSampleRate: outputFormat.sampleRate, channels: 1)!
+        engine.attach(generator)
+        engine.connect(generator, to: engine.mainMixerNode, format: monoFormat)
+        engine.connect(engine.mainMixerNode, to: engine.outputNode, format: outputFormat)
+
+        // engine.prepare()
+        // sleep(1)
+        print("isVoiceProcessingEnabled: \(engine.outputNode.isVoiceProcessingEnabled)")
+
+        // try LKObjCHelpers.catchException {
+        try engine.start()
+        // }
+        print("isRunning: \(engine.isRunning)")
+
+        // Attempt to start ADM's audio engine while another engine is running first.
+        try AudioManager.shared.startLocalRecording()
+
+        // Render for 5 seconds...
+        try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)
+    }
 }
 
 final class FailingEngineObserver: AudioEngineObserver, @unchecked Sendable {
@@ -347,21 +377,21 @@ final class SineWaveNodeHook: AudioEngineObserver, @unchecked Sendable {
 final class PlayerNodeHook: AudioEngineObserver, @unchecked Sendable {
     var next: (any LiveKit.AudioEngineObserver)?
 
-    public let playerNode = AVAudioPlayerNode()
-    public let playerMixerNode = AVAudioMixerNode()
-    public let playerNodeFormat: AVAudioFormat
+    let playerNode = AVAudioPlayerNode()
+    let playerMixerNode = AVAudioMixerNode()
+    let playerNodeFormat: AVAudioFormat
 
     init(playerNodeFormat: AVAudioFormat) {
         self.playerNodeFormat = playerNodeFormat
     }
 
-    public func engineDidCreate(_ engine: AVAudioEngine) -> Int {
+    func engineDidCreate(_ engine: AVAudioEngine) -> Int {
         engine.attach(playerNode)
         engine.attach(playerMixerNode)
         return 0
     }
 
-    public func engineWillRelease(_ engine: AVAudioEngine) -> Int {
+    func engineWillRelease(_ engine: AVAudioEngine) -> Int {
         engine.detach(playerNode)
         engine.detach(playerMixerNode)
         return 0

@@ -17,10 +17,11 @@
 @preconcurrency import AVFAudio
 
 final class AudioConverter: Sendable {
-    let converter: AVAudioConverter
     let inputFormat: AVAudioFormat
     let outputFormat: AVAudioFormat
-    let outputBuffer: AVAudioPCMBuffer
+
+    private let converter: AVAudioConverter
+    private let outputBuffer: AVAudioPCMBuffer
 
     /// Computes required frame capacity for output buffer.
     static func frameCapacity(from inputFormat: AVAudioFormat, to outputFormat: AVAudioFormat, inputFrameCount: AVAudioFrameCount) -> AVAudioFrameCount {
@@ -43,9 +44,14 @@ final class AudioConverter: Sendable {
         self.outputFormat = outputFormat
     }
 
-    func convert(from inputBuffer: AVAudioPCMBuffer) {
+    func convert(from inputBuffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer {
         var error: NSError?
+        #if swift(>=6.0)
+        // Won't be accessed concurrently, marking as nonisolated(unsafe) to avoid Atomics.
+        nonisolated(unsafe) var bufferFilled = false
+        #else
         var bufferFilled = false
+        #endif
 
         converter.convert(to: outputBuffer, error: &error) { _, outStatus in
             if bufferFilled {
@@ -56,5 +62,7 @@ final class AudioConverter: Sendable {
             bufferFilled = true
             return inputBuffer
         }
+
+        return outputBuffer.copySegment()
     }
 }

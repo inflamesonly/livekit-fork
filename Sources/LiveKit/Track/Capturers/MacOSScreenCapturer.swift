@@ -21,11 +21,7 @@ import Foundation
 import ScreenCaptureKit
 #endif
 
-#if swift(>=5.9)
 internal import LiveKitWebRTC
-#else
-@_implementationOnly import LiveKitWebRTC
-#endif
 
 #if os(macOS)
 
@@ -75,11 +71,13 @@ public class MacOSScreenCapturer: VideoCapturer, @unchecked Sendable {
                   let content = displaySource.scContent as? SCShareableContent,
                   let nativeDisplay = displaySource.nativeType as? SCDisplay
         {
-            let excludedApps = !options.includeCurrentApplication ? content.applications.filter { app in
-                Bundle.main.bundleIdentifier == app.bundleIdentifier
-            } : []
+            let includedApps = options.includeCurrentApplication ?
+                content.applications :
+                content.applications.filter { app in Bundle.main.bundleIdentifier != app.bundleIdentifier }
 
-            filter = SCContentFilter(display: nativeDisplay, excludingApplications: excludedApps, exceptingWindows: [])
+            let excludedWindows = content.windows.filter { window in options.excludeWindowIDs.contains(window.windowID) }
+
+            filter = SCContentFilter(display: nativeDisplay, including: includedApps, exceptingWindows: excludedWindows)
         } else {
             log("Unable to resolve SCContentFilter", .error)
             throw LiveKitError(.invalidState, message: "Unable to resolve SCContentFilter")
@@ -103,7 +101,7 @@ public class MacOSScreenCapturer: VideoCapturer, @unchecked Sendable {
         }
 
         // Why does SCStream hold strong reference to delegate?
-        let stream = SCStream(filter: filter, configuration: configuration, delegate: nil)
+        let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: nil)
         if #available(macOS 13.0, *) {
             try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: nil)
@@ -202,6 +200,18 @@ extension MacOSScreenCapturer {
     }
 }
 
+// MARK: - SCStreamDelegate
+
+@available(macOS 12.3, *)
+extension MacOSScreenCapturer: SCStreamDelegate {
+    public func stream(_: SCStream, didStopWithError error: Error) {
+        log("Stream stopped with error: \(error)", .error)
+        Task {
+            try await stopCapture()
+        }
+    }
+}
+
 // MARK: - SCStreamOutput
 
 @available(macOS 12.3, *)
@@ -243,7 +253,7 @@ extension MacOSScreenCapturer: SCStreamOutput {
                     try? await Task.sleep(nanoseconds: UInt64(1 * 1_000_000_000))
                     if Task.isCancelled { break }
                     guard let self else { break }
-                    try await self._capturePreviousFrame()
+                    try await _capturePreviousFrame()
                 }
             }
 

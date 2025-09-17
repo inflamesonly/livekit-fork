@@ -18,22 +18,17 @@
 
 import Foundation
 import OSLog
-
-#if swift(>=5.9)
 internal import Logging
-#else
-@_implementationOnly import Logging
-#endif
 
 struct OSLogHandler: LogHandler {
-    public var logLevel: Logging.Logger.Level = .debug
+    var logLevel: Logging.Logger.Level = .debug
     private let oslogger: OSLog
 
     init(_ oslogger: OSLog) {
         self.oslogger = oslogger
     }
 
-    public func log(
+    func log(
         level _: Logging.Logger.Level,
         message: Logging.Logger.Message,
         metadata: Logging.Logger.Metadata?,
@@ -59,7 +54,7 @@ struct OSLogHandler: LogHandler {
     }
 
     private var prettyMetadata: String?
-    public var metadata = Logger.Metadata() {
+    var metadata = Logger.Metadata() {
         didSet {
             prettyMetadata = prettify(metadata)
         }
@@ -68,7 +63,7 @@ struct OSLogHandler: LogHandler {
     /// Add, remove, or change the logging metadata.
     /// - parameters:
     ///    - metadataKey: the key for the metadata item.
-    public subscript(metadataKey metadataKey: String) -> Logging.Logger.Metadata.Value? {
+    subscript(metadataKey metadataKey: String) -> Logging.Logger.Metadata.Value? {
         get {
             metadata[metadataKey]
         }
@@ -90,23 +85,23 @@ struct OSLogHandler: LogHandler {
 private extension OSLogType {
     static func from(loggerLevel: Logging.Logger.Level) -> Self {
         switch loggerLevel {
-        case .debug: return .debug
+        case .debug: .debug
 
-        case .info: return .info
+        case .info: .info
 
-        case .error: return .error
+        case .error: .error
 
-        case .critical: return .fault
+        case .critical: .fault
 
         // `OSLog` doesn't have `trace`, so use `debug`
-        case .trace: return .debug
+        case .trace: .debug
 
         // https://developer.apple.com/documentation/os/logging/generating_log_messages_from_your_code
         // According to the documentation, `default` is `notice`.
-        case .notice: return .default
+        case .notice: .default
 
         // `OSLog` doesn't have `warning`, so use `info`
-        case .warning: return .info
+        case .warning: .info
         }
     }
 }

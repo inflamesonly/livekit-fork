@@ -17,11 +17,7 @@
 @preconcurrency import AVFoundation
 import Foundation
 
-#if swift(>=5.9)
 internal import LiveKitWebRTC
-#else
-@_implementationOnly import LiveKitWebRTC
-#endif
 
 public let kLiveKitKrispAudioProcessorName = "livekit_krisp_noise_cancellation"
 
@@ -50,7 +46,8 @@ public protocol AudioCustomProcessingDelegate: Sendable {
 class AudioCustomProcessingDelegateAdapter: MulticastDelegate<AudioRenderer>, @unchecked Sendable, LKRTCAudioCustomProcessingDelegate {
     // MARK: - Public
 
-    public var target: AudioCustomProcessingDelegate? { _state.target }
+    let label: String
+    var target: AudioCustomProcessingDelegate? { _state.target }
 
     // MARK: - Private
 
@@ -60,12 +57,14 @@ class AudioCustomProcessingDelegateAdapter: MulticastDelegate<AudioRenderer>, @u
 
     private var _state = StateSync(State())
 
-    public func set(target: AudioCustomProcessingDelegate?) {
+    func set(target: AudioCustomProcessingDelegate?) {
         _state.mutate { $0.target = target }
     }
 
-    init() {
-        super.init(label: "AudioCustomProcessingDelegateAdapter")
+    init(label: String) {
+        self.label = label
+        super.init(label: "AudioCustomProcessingDelegateAdapter.\(label)")
+        log("label: \(label)")
     }
 
     // MARK: - AudioCustomProcessingDelegate

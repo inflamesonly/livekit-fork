@@ -230,14 +230,14 @@ public class AudioMixRecorder: Loggable, @unchecked Sendable {
         writeQueue.async { [weak self, renderBuffer, audioFile = self.audioFile] in
             guard let self else { return }
             guard let audioFile else {
-                self.log("Audio file is already closed", .error)
+                log("Audio file is already closed", .error)
                 return
             }
 
             do {
                 try audioFile.write(from: renderBuffer)
             } catch {
-                self.log("Failed to write to audio file: \(error)", .error)
+                log("Failed to write to audio file: \(error)", .error)
             }
         }
     }
@@ -307,10 +307,8 @@ public class AudioMixRecorderSource: Loggable, AudioRenderer, @unchecked Sendabl
         }
 
         if let converter {
-            converter.convert(from: pcmBuffer)
-            // Copy the converted segment from buffer and schedule it.
-            let segment = converter.outputBuffer.copySegment()
-            playerNode.scheduleBuffer(segment, completionHandler: nil)
+            let buffer = converter.convert(from: pcmBuffer)
+            playerNode.scheduleBuffer(buffer, completionHandler: nil)
             play()
         }
     }
